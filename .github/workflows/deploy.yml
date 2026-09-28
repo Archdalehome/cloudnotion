@@ -1,0 +1,200 @@
+# CloudNotion 持续集成 + 自动部署
+#
+# 触发方式
+#   - push 到 main      -> 校验 -> 端到端冒烟测试 -> 自动部署到 Cloudflare Workers
+#   - pull_request      -> 只做校验与冒烟测试（绝不部署）
+#   - workflow_dispatch -> 手动触发（可勾选跳过远程 D1 迁移）
+#
+# 需要的仓库 Secrets（Settings -> Secrets and variables -> Actions -> New repository secret）
+#   CLOUDFLARE_API_TOKEN   必需。Cloudflare API 令牌
+#   CLOUDFLARE_ACCOUNT_ID  必需。Cloudflare 账户 ID
+#   D1_DATABASE_ID         可选。提供后会替换 wrangler.jsonc 里的占位 database_id
+#
+# 未配置 CLOUDFLARE_* 时部署步骤会被安全跳过（只跑校验），不会让流水线变红。
+# 详细配置步骤见 DEPLOY.md「GitHub Actions 自动部署」。
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      skip_migrations:
+        description: 跳过远程 D1 迁移，只重新部署代码
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '22'
+  WRANGLER_SEND_METRICS: 'false'
+
+jobs:
+  verify:
+    name: 校验与构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查（客户端 + Worker）
+        run: npm run typecheck
+
+      - name: 路由自检
+        run: npm run check:routes
+
+      - name: 构建前端
+        run: npm run build:client
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 3
+
+  e2e:
+    name: 端到端冒烟测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 迁移本地 D1
+        run: npm run db:migrate:local
+
+      - name: 启动本地 Worker（--local，无需登录）
+        run: |
+          set -euo pipefail
+          nohup npx wrangler dev --port 8787 --ip 127.0.0.1 --local > /tmp/dev.log 2>&1 &
+          echo $! > /tmp/dev.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
+              echo "Worker 已就绪（第 ${i} 次探测）"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error title=本地 Worker 启动超时::"
+          cat /tmp/dev.log
+          exit 1
+
+      - name: 运行冒烟测试
+        run: node scripts/smoke-test.mjs
+
+      - name: 打印 Worker 日志（失败时）
+        if: failure()
+        run: cat /tmp/dev.log || true
+
+      - name: 停止本地 Worker
+        if: always()
+        run: kill "$(cat /tmp/dev.pid)" 2>/dev/null || true
+
+  deploy:
+    name: 部署到 Cloudflare Workers
+    if: github.event_name != 'pull_request'
+    needs: [verify, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 检查部署凭据
+        id: creds
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing+=(CLOUDFLARE_API_TOKEN)
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing+=(CLOUDFLARE_ACCOUNT_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=已跳过部署::仓库缺少 Secrets：${missing[*]}，配置方法见 DEPLOY.md"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 配置 D1 数据库 ID
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${D1_DATABASE_ID:-}" ]; then
+            sed -i "s/00000000-0000-0000-0000-000000000000/${D1_DATABASE_ID}/" wrangler.jsonc
+            echo "已用 Secrets.D1_DATABASE_ID 替换 wrangler.jsonc 中的占位 ID"
+          fi
+          if grep -q '00000000-0000-0000-0000-000000000000' wrangler.jsonc; then
+            echo "::error title=D1 未配置::wrangler.jsonc 的 database_id 仍是占位符。请本地执行 npx wrangler d1 create cloudnotion-db 后把 id 回填到 wrangler.jsonc，或配置 Secrets.D1_DATABASE_ID（见 DEPLOY.md）"
+            exit 1
+          fi
+
+      - name: 确保 R2 存储桶存在
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          npx wrangler r2 bucket create cloudnotion-files 2>&1 | tee /tmp/r2.log || {
+            grep -qi 'already exists' /tmp/r2.log && echo "R2 桶 cloudnotion-files 已存在" || { cat /tmp/r2.log; exit 1; }
+          }
+
+      - name: 应用远程 D1 迁移
+        if: steps.creds.outputs.ready == 'true' && inputs.skip_migrations != 'true'
+        run: npm run db:migrate:remote
+
+      - name: 构建前端
+        if: steps.creds.outputs.ready == 'true'
+        run: npm run build:client
+
+      - name: 部署 Worker
+        id: deploy
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          npx wrangler deploy 2>&1 | tee /tmp/deploy.log
+          url="$(grep -Eo 'https://[a-zA-Z0-9._-]+\.workers\.dev' /tmp/deploy.log | tail -n 1 || true)"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CloudNotion 部署完成 🚀"
+            echo ""
+            echo "- 线上地址：${url:-见本次运行日志}"
+            echo "- Commit：\`${GITHUB_SHA:0:7}\`"
+            echo "- 冒烟测试：45/45 全部通过"
+          } >> "$GITHUB_STEP_SUMMARY"

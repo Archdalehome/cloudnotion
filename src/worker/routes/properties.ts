@@ -1,0 +1,287 @@
+/** /api/properties* - user defined fields (name, type, config, order, width). */
+import { FIELD_META, normalizeCellValue } from '../../shared/fields';
+import type { FieldType, PropertyConfig, RowValues, SelectOption } from '../../shared/types';
+import { accessForProperty, requireDatabaseAccess } from '../access';
+import { requireUser } from '../auth';
+import {
+  asEnum,
+  asNumberValue,
+  asString,
+  badRequest,
+  json,
+  newId,
+  notFound,
+  readJson,
+  sqlNumber,
+  sqlString,
+  type SqlRow,
+} from '../http';
+import { propertyFromRow } from '../mappers';
+import type { RequestContext, Route } from '../types';
+import { loadProperties, touchDatabase } from './databases';
+
+const FIELD_TYPES = Object.keys(FIELD_META) as FieldType[];
+const OPTION_COLORS = [
+  'default',
+  'gray',
+  'brown',
+  'orange',
+  'yellow',
+  'green',
+  'blue',
+  'purple',
+  'pink',
+  'red',
+] as const;
+const NUMBER_FORMATS = ['plain', 'comma', 'percent', 'currency'] as const;
+const DATE_FORMATS = ['YYYY-MM-DD', 'DD/MM/YYYY', 'MMM D, YYYY', 'YYYY年M月D日'] as const;
+
+function normalizeOptions(raw: unknown): SelectOption[] {
+  if (!Array.isArray(raw)) throw badRequest('选项必须是数组');
+  if (raw.length > 200) throw badRequest('选项数量不能超过 200 个');
+  const seen = new Set<string>();
+  const options: SelectOption[] = [];
+  raw.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return;
+    const source = item as Partial<SelectOption>;
+    const name = asString(source.name, '选项名称', { max: 80 });
+    if (!name) return;
+    const id = typeof source.id === 'string' && source.id ? source.id : newId();
+    if (seen.has(id)) return;
+    seen.add(id);
+    const color =
+      typeof source.color === 'string' && (OPTION_COLORS as readonly string[]).includes(source.color)
+        ? (source.color as SelectOption['color'])
+        : OPTION_COLORS[index % (OPTION_COLORS.length - 1)];
+    options.push({ id, name, color });
+  });
+  return options;
+}
+
+/** Validate / coerce an incoming config for the given field type. */
+export function normalizeConfig(type: FieldType, raw: unknown, existing: PropertyConfig): PropertyConfig {
+  const source = raw && typeof raw === 'object' ? (raw as PropertyConfig) : {};
+  const config: PropertyConfig = { ...existing };
+
+  if (type === 'select' || type === 'multi_select' || type === 'status') {
+    config.options = normalizeOptions(source.options ?? existing.options ?? []);
+  } else {
+    delete config.options;
+  }
+
+  if (type === 'number') {
+    config.format = asEnum(source.format ?? existing.format ?? 'plain', NUMBER_FORMATS, '数字格式');
+    config.precision = Math.min(Math.max(Math.round(Number(source.precision ?? existing.precision ?? 0)), 0), 8);
+    if (config.format === 'currency') {
+      const currency = asString(source.currency ?? existing.currency ?? 'CNY', '货币', { max: 8 }) || 'CNY';
+      config.currency = currency.toUpperCase();
+    } else {
+      delete config.currency;
+    }
+  } else {
+    delete config.format;
+    delete config.precision;
+    delete config.currency;
+  }
+
+  if (type === 'date' || type === 'created_time' || type === 'updated_time') {
+    config.dateFormat = asEnum(source.dateFormat ?? existing.dateFormat ?? 'YYYY-MM-DD', DATE_FORMATS, '日期格式');
+    config.includeTime = Boolean(source.includeTime ?? existing.includeTime ?? false);
+  } else {
+    delete config.dateFormat;
+    delete config.includeTime;
+  }
+
+  return config;
+}
+
+/** Re-normalise all stored values of a property (used when its type changes). */
+async function migrateValues(
+  ctx: RequestContext,
+  databaseId: string,
+  propertyId: string,
+  type: FieldType,
+  config: PropertyConfig,
+): Promise<number> {
+  const { results } = await ctx.env.DB.prepare(
+    'SELECT id, "values" FROM records WHERE database_id = ? AND is_archived = 0 LIMIT 5000',
+  )
+    .bind(databaseId)
+    .all<SqlRow>();
+  const updates: D1PreparedStatement[] = [];
+  for (const row of results ?? []) {
+    let values: RowValues;
+    try {
+      values = JSON.parse(sqlString(row, 'values', '{}')) as RowValues;
+    } catch {
+      continue;
+    }
+    if (!(propertyId in values)) continue;
+    const next = normalizeCellValue(type, values[propertyId], config);
+    if (next === null) delete values[propertyId];
+    else values[propertyId] = next;
+    updates.push(
+      ctx.env.DB.prepare('UPDATE records SET "values" = ? WHERE id = ?')
+        .bind(JSON.stringify(values), sqlString(row, 'id')),
+    );
+  }
+  if (updates.length) await ctx.env.DB.batch(updates);
+  return updates.length;
+}
+
+async function nextPosition(ctx: RequestContext, databaseId: string): Promise<number> {
+  const row = await ctx.env.DB.prepare(
+    'SELECT MAX(position) AS max_position FROM properties WHERE database_id = ?',
+  )
+    .bind(databaseId)
+    .first<SqlRow>();
+  return sqlNumber(row ?? {}, 'max_position', 0) + 1000;
+}
+
+async function createPropertyHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+
+  const name = asString(body.name, '字段名称', { required: true, max: 120 });
+  const type = asEnum(body.type ?? 'text', FIELD_TYPES, '字段类型');
+  const config = normalizeConfig(type, body.config, {});
+  const width = Number.isFinite(Number(body.width))
+    ? Number(body.width)
+    : FIELD_META[type].defaultWidth;
+  const position =
+    body.position === undefined ? await nextPosition(ctx, ctx.params.id) : asNumberValue(body.position, 'position');
+
+  const propertyId = newId();
+  const now = Date.now();
+  await ctx.env.DB.prepare(
+    `INSERT INTO properties (id, database_id, name, type, config, position, width, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      propertyId,
+      ctx.params.id,
+      name,
+      type,
+      JSON.stringify(config),
+      position,
+      Math.min(Math.max(Math.round(width), 80), 800),
+      now,
+      now,
+    )
+    .run();
+  await touchDatabase(ctx.env, ctx.params.id);
+
+  return json({ properties: await loadProperties(ctx.env, ctx.params.id), propertyId }, { status: 201 });
+}
+
+async function updatePropertyHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await accessForProperty(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+
+  const row = await ctx.env.DB.prepare('SELECT * FROM properties WHERE id = ?')
+    .bind(ctx.params.id)
+    .first<SqlRow>();
+  if (!row) throw notFound('字段不存在');
+  const current = propertyFromRow(row);
+
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  let typeChanged = false;
+  let nextType = current.type;
+  let nextConfig = current.config;
+
+  if (body.name !== undefined) {
+    fields.push('name = ?');
+    values.push(asString(body.name, '字段名称', { required: true, max: 120 }));
+  }
+  if (body.type !== undefined) {
+    nextType = asEnum(body.type, FIELD_TYPES, '字段类型');
+    typeChanged = nextType !== current.type;
+  }
+  if (body.config !== undefined || typeChanged) {
+    nextConfig = normalizeConfig(nextType, body.config ?? current.config, current.config);
+    fields.push('config = ?');
+    values.push(JSON.stringify(nextConfig));
+  }
+  if (typeChanged) {
+    fields.push('type = ?');
+    values.push(nextType);
+  }
+  if (body.width !== undefined) {
+    fields.push('width = ?');
+    values.push(Math.min(Math.max(Math.round(asNumberValue(body.width, '列宽')), 80), 800));
+  }
+  if (body.position !== undefined) {
+    fields.push('position = ?');
+    values.push(asNumberValue(body.position, 'position'));
+  }
+  if (!fields.length) {
+    return json({ property: current, properties: await loadProperties(ctx.env, access.databaseId) });
+  }
+
+  fields.push('updated_at = ?');
+  values.push(Date.now(), ctx.params.id);
+  await ctx.env.DB.prepare(`UPDATE properties SET ${fields.join(', ')} WHERE id = ?`)
+    .bind(...values)
+    .run();
+
+  let migrated = 0;
+  if (typeChanged) {
+    migrated = await migrateValues(ctx, access.databaseId, ctx.params.id, nextType, nextConfig);
+  }
+  await touchDatabase(ctx.env, access.databaseId);
+
+  const updated = await ctx.env.DB.prepare('SELECT * FROM properties WHERE id = ?')
+    .bind(ctx.params.id)
+    .first<SqlRow>();
+  return json({
+    property: updated ? propertyFromRow(updated) : current,
+    properties: await loadProperties(ctx.env, access.databaseId),
+    migrated,
+  });
+}
+
+async function deletePropertyHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await accessForProperty(ctx.env, ctx.params.id, user, 'edit');
+
+  const properties = await loadProperties(ctx.env, access.databaseId);
+  if (properties.length <= 1) throw badRequest('至少需要保留一个字段');
+
+  await ctx.env.DB.prepare('DELETE FROM properties WHERE id = ?').bind(ctx.params.id).run();
+
+  // drop the now orphaned cell values
+  const { results } = await ctx.env.DB.prepare(
+    'SELECT id, "values" FROM records WHERE database_id = ? AND is_archived = 0 LIMIT 5000',
+  )
+    .bind(access.databaseId)
+    .all<SqlRow>();
+  const updates: D1PreparedStatement[] = [];
+  for (const record of results ?? []) {
+    let values: RowValues;
+    try {
+      values = JSON.parse(sqlString(record, 'values', '{}')) as RowValues;
+    } catch {
+      continue;
+    }
+    if (!(ctx.params.id in values)) continue;
+    delete values[ctx.params.id];
+    updates.push(
+      ctx.env.DB.prepare('UPDATE records SET "values" = ? WHERE id = ?')
+        .bind(JSON.stringify(values), sqlString(record, 'id')),
+    );
+  }
+  if (updates.length) await ctx.env.DB.batch(updates);
+
+  await touchDatabase(ctx.env, access.databaseId);
+  return json({ properties: await loadProperties(ctx.env, access.databaseId) });
+}
+
+export const propertyRoutes: Route[] = [
+  { method: 'POST', path: '/api/databases/:id/properties', handler: createPropertyHandler },
+  { method: 'PATCH', path: '/api/properties/:id', handler: updatePropertyHandler },
+  { method: 'DELETE', path: '/api/properties/:id', handler: deletePropertyHandler },
+];
+

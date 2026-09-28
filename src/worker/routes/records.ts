@@ -1,0 +1,273 @@
+/** /api/records* - rows of a table (create / update / delete / duplicate). */
+import { FIELD_META, normalizeCellValue } from '../../shared/fields';
+import type { Property, RowRecord, RowValues } from '../../shared/types';
+import { accessForRecord, requireDatabaseAccess } from '../access';
+import { requireUser } from '../auth';
+import {
+  asNumberValue,
+  badRequest,
+  json,
+  newId,
+  notFound,
+  positionBetween,
+  readJson,
+  sqlNumber,
+  sqlString,
+  type SqlRow,
+} from '../http';
+import { recordFromRow } from '../mappers';
+import type { Env, RequestContext, Route } from '../types';
+import { countRecords, loadProperties, loadRecord, loadRecords, touchDatabase } from './databases';
+
+const MAX_BULK = 200;
+
+/** Merge incoming cell values into `base`, ignoring unknown / read-only properties. */
+export function normalizeValues(properties: Property[], incoming: unknown, base: RowValues = {}): RowValues {
+  const next: RowValues = { ...base };
+  if (!incoming || typeof incoming !== 'object') return next;
+  const byId = new Map(properties.map((property) => [property.id, property]));
+  for (const [key, raw] of Object.entries(incoming as Record<string, unknown>)) {
+    const property = byId.get(key);
+    if (!property || FIELD_META[property.type].computed) continue;
+    const value = normalizeCellValue(property.type, raw, property.config);
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  return next;
+}
+
+async function nextRecordPosition(env: Env, databaseId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    'SELECT MAX(position) AS max_position FROM records WHERE database_id = ? AND is_archived = 0',
+  )
+    .bind(databaseId)
+    .first<SqlRow>();
+  return sqlNumber(row ?? {}, 'max_position', 0) + 1000;
+}
+
+/** Position for a row inserted directly after `anchorId` (fractional indexing). */
+async function positionAfter(env: Env, databaseId: string, anchorId: string | null): Promise<number> {
+  if (!anchorId) return nextRecordPosition(env, databaseId);
+  const anchor = await env.DB.prepare('SELECT position FROM records WHERE id = ? AND database_id = ?')
+    .bind(anchorId, databaseId)
+    .first<SqlRow>();
+  if (!anchor) return nextRecordPosition(env, databaseId);
+  const anchorPosition = sqlNumber(anchor, 'position');
+  const following = await env.DB.prepare(
+    `SELECT MIN(position) AS next_position FROM records
+      WHERE database_id = ? AND is_archived = 0 AND position > ?`,
+  )
+    .bind(databaseId, anchorPosition)
+    .first<SqlRow>();
+  const rawNext = following?.next_position;
+  const nextPosition = rawNext === null || rawNext === undefined ? null : sqlNumber(following ?? {}, 'next_position');
+  return positionBetween(anchorPosition, nextPosition);
+}
+
+/** Create one row; `afterId` inserts it directly below an existing row. */
+async function createRecordHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+
+  const properties = await loadProperties(ctx.env, ctx.params.id);
+  if (!properties.length) throw badRequest('该表格还没有字段');
+
+  const values = normalizeValues(properties, body.values);
+  const position = await positionAfter(ctx.env, ctx.params.id, body.afterId ? String(body.afterId) : null);
+
+  const recordId = newId();
+  const now = Date.now();
+  await ctx.env.DB.prepare(
+    `INSERT INTO records (id, database_id, "values", position, created_by, updated_by, is_archived, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+  )
+    .bind(
+      recordId,
+      ctx.params.id,
+      JSON.stringify(values),
+      position,
+      user.id,
+      user.id,
+      now,
+      now,
+    )
+    .run();
+  await touchDatabase(ctx.env, ctx.params.id);
+
+  return json(
+    {
+      record: await loadRecord(ctx.env, recordId),
+      total: await countRecords(ctx.env, ctx.params.id),
+    },
+    { status: 201 },
+  );
+}
+
+/** Create many rows at once (import / paste). `records` is an array of value maps. */
+async function bulkCreateHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+
+  const list: unknown[] = Array.isArray(body.records)
+    ? body.records
+    : Array.isArray(body.rows)
+      ? body.rows
+      : [];
+  if (!list.length) throw badRequest('请至少提交一行数据');
+  if (list.length > MAX_BULK) throw badRequest(`单次最多创建 ${MAX_BULK} 行`);
+
+  const properties = await loadProperties(ctx.env, ctx.params.id);
+  if (!properties.length) throw badRequest('该表格还没有字段');
+
+  let position = await positionAfter(ctx.env, ctx.params.id, body.afterId ? String(body.afterId) : null);
+  const now = Date.now();
+  const ids: string[] = [];
+  const statements: D1PreparedStatement[] = [];
+  for (const item of list) {
+    const source = item && typeof item === 'object' && 'values' in (item as Record<string, unknown>)
+      ? (item as { values: unknown }).values
+      : item;
+    const values = normalizeValues(properties, source);
+    const id = newId();
+    ids.push(id);
+    statements.push(
+      ctx.env.DB.prepare(
+        `INSERT INTO records (id, database_id, "values", position, created_by, updated_by, is_archived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      ).bind(id, ctx.params.id, JSON.stringify(values), position, user.id, user.id, now, now),
+    );
+    position += 1;
+  }
+
+  await ctx.env.DB.batch(statements);
+  await touchDatabase(ctx.env, ctx.params.id);
+
+  const loaded = await Promise.all(ids.map((id) => loadRecord(ctx.env, id)));
+  return json(
+    {
+      records: loaded.filter((record): record is RowRecord => record !== null),
+      total: await countRecords(ctx.env, ctx.params.id),
+    },
+    { status: 201 },
+  );
+}
+
+async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await accessForRecord(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+
+  const row = await ctx.env.DB.prepare('SELECT * FROM records WHERE id = ?')
+    .bind(ctx.params.id)
+    .first<SqlRow>();
+  if (!row) throw notFound('记录不存在');
+  const current = recordFromRow(row);
+
+  const properties = await loadProperties(ctx.env, access.databaseId);
+  const values =
+    body.values === undefined ? current.values : normalizeValues(properties, body.values, current.values);
+
+  const fields = ['"values" = ?', 'updated_by = ?', 'updated_at = ?'];
+  const params: unknown[] = [JSON.stringify(values), user.id, Date.now()];
+  if (body.position !== undefined) {
+    fields.push('position = ?');
+    params.push(asNumberValue(body.position, 'position'));
+  }
+  params.push(ctx.params.id);
+  await ctx.env.DB.prepare(`UPDATE records SET ${fields.join(', ')} WHERE id = ?`)
+    .bind(...params)
+    .run();
+  await touchDatabase(ctx.env, access.databaseId);
+
+  return json({
+    record: await loadRecord(ctx.env, ctx.params.id),
+    total: await countRecords(ctx.env, access.databaseId),
+  });
+}
+
+async function deleteRecordHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await accessForRecord(ctx.env, ctx.params.id, user, 'edit');
+  await ctx.env.DB.prepare('DELETE FROM records WHERE id = ?').bind(ctx.params.id).run();
+  await touchDatabase(ctx.env, access.databaseId);
+  return json({ ok: true, total: await countRecords(ctx.env, access.databaseId) });
+}
+
+async function duplicateRecordsHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+  const recordIds = Array.isArray(body.recordIds) ? body.recordIds.map(String) : [];
+  if (!recordIds.length) throw badRequest('请选择要复制的记录');
+  if (recordIds.length > MAX_BULK) throw badRequest(`单次最多复制 ${MAX_BULK} 行`);
+
+  const now = Date.now();
+  const created: RowRecord[] = [];
+  for (const recordId of recordIds) {
+    const source = await ctx.env.DB.prepare(
+      'SELECT * FROM records WHERE id = ? AND database_id = ? AND is_archived = 0',
+    )
+      .bind(recordId, ctx.params.id)
+      .first<SqlRow>();
+    if (!source) continue;
+    const position = await positionAfter(ctx.env, ctx.params.id, sqlString(source, 'id'));
+    const id = newId();
+    await ctx.env.DB.prepare(
+      `INSERT INTO records (id, database_id, "values", position, created_by, updated_by, is_archived, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+    )
+      .bind(id, ctx.params.id, sqlString(source, 'values', '{}'), position, user.id, user.id, now, now)
+      .run();
+    const record = await loadRecord(ctx.env, id);
+    if (record) created.push(record);
+  }
+  if (!created.length) throw notFound('没有找到可复制的记录');
+  await touchDatabase(ctx.env, ctx.params.id);
+  return json(
+    { records: created, total: await countRecords(ctx.env, ctx.params.id) },
+    { status: 201 },
+  );
+}
+
+async function bulkDeleteHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const body = await readJson(ctx.request);
+  const recordIds = Array.isArray(body.recordIds) ? body.recordIds.map(String) : [];
+  if (!recordIds.length) throw badRequest('请选择要删除的记录');
+  if (recordIds.length > MAX_BULK) throw badRequest(`单次最多删除 ${MAX_BULK} 行`);
+
+  const placeholders = recordIds.map(() => '?').join(', ');
+  await ctx.env.DB.prepare(`DELETE FROM records WHERE database_id = ? AND id IN (${placeholders})`)
+    .bind(ctx.params.id, ...recordIds)
+    .run();
+  await touchDatabase(ctx.env, ctx.params.id);
+  return json({ deleted: recordIds.length, total: await countRecords(ctx.env, ctx.params.id) });
+}
+
+/** Fresh page of rows (used by "load more" when a table holds more than one page). */
+async function pageHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
+  const limit = Math.min(Math.max(Math.floor(Number(ctx.url.searchParams.get('limit')) || 200), 1), 1000);
+  const offset = Math.max(Math.floor(Number(ctx.url.searchParams.get('offset')) || 0), 0);
+  const [rows, total] = await Promise.all([
+    loadRecords(ctx.env, ctx.params.id, limit, offset),
+    countRecords(ctx.env, ctx.params.id),
+  ]);
+  return json({ rows, total, hasMore: offset + rows.length < total });
+}
+
+export const recordRoutes: Route[] = [
+  { method: 'POST', path: '/api/databases/:id/records', handler: createRecordHandler },
+  { method: 'POST', path: '/api/databases/:id/records/bulk', handler: bulkCreateHandler },
+  { method: 'POST', path: '/api/databases/:id/records/duplicate', handler: duplicateRecordsHandler },
+  { method: 'POST', path: '/api/databases/:id/records/delete', handler: bulkDeleteHandler },
+  { method: 'GET', path: '/api/databases/:id/rows', handler: pageHandler },
+  { method: 'PATCH', path: '/api/records/:id', handler: updateRecordHandler },
+  { method: 'DELETE', path: '/api/records/:id', handler: deleteRecordHandler },
+];
+
+

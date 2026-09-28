@@ -1,0 +1,49 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cloudnotion",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+
+  // Static front-end (built by Vite into ./dist).
+  // /api/* is always routed to the Worker first, everything else is served
+  // from the asset store, with a SPA fallback to index.html.
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // ---- D1 database -------------------------------------------------------
+  // Replace database_id with the id printed by:
+  //   npx wrangler d1 create cloudnotion-db
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cloudnotion-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ---- R2 bucket (file / attachment storage) -----------------------------
+  // Create with: npx wrangler r2 bucket create cloudnotion-files
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "cloudnotion-files"
+    }
+  ],
+
+  "vars": {
+    "APP_NAME": "CloudNotion",
+    "MAX_UPLOAD_MB": "25",
+    // set to "false" to close public registration
+    "ALLOW_SIGNUP": "true"
+  }
+}
