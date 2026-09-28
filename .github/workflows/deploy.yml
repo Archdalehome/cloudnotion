@@ -85,23 +85,26 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      - name: 构建前端（wrangler 的 assets 目录 ./dist 必须先存在）
+        run: npm run build:client
+
       - name: 迁移本地 D1
         run: npm run db:migrate:local
 
       - name: 启动本地 Worker（--local，无需登录）
         run: |
           set -euo pipefail
-          nohup npx wrangler dev --port 8787 --ip 127.0.0.1 --local > /tmp/dev.log 2>&1 &
+          nohup npx wrangler dev --port 8787 --ip 127.0.0.1 --local --log-level info > /tmp/dev.log 2>&1 &
           echo $! > /tmp/dev.pid
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
-              echo "Worker 已就绪（第 ${i} 次探测）"
+              echo "Worker 已就绪（第 ${i} 次探测，累计 $((i * 2)) 秒）"
               exit 0
             fi
             sleep 2
           done
-          echo "::error title=本地 Worker 启动超时::"
-          cat /tmp/dev.log
+          echo "::error title=本地 Worker 启动超时::最后 60 行日志如下"
+          tail -n 60 /tmp/dev.log || true
           exit 1
 
       - name: 运行冒烟测试
