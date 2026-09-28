@@ -119,7 +119,7 @@ GET    /api/health
 ```
 verify   npm ci -> npm run typecheck -> npm run check:routes -> vite build
 e2e      本地 D1 迁移 -> wrangler dev --local -> scripts/smoke-test.mjs（45 项断言）
-deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy
+deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 线上 45 项冒烟测试
 ```
 
 只需在仓库 `Settings → Secrets and variables → Actions` 配置：

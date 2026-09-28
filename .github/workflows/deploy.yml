@@ -1,7 +1,7 @@
 # CloudNotion 持续集成 + 自动部署
 #
 # 触发方式
-#   - push 到 main      -> 校验 -> 端到端冒烟测试 -> 自动部署到 Cloudflare Workers
+#   - push 到 main      -> 校验 -> 端到端冒烟测试 -> 自动部署到 Cloudflare Workers -> 线上冒烟测试
 #   - pull_request      -> 只做校验与冒烟测试（绝不部署）
 #   - workflow_dispatch -> 手动触发（可勾选跳过远程 D1 迁移）
 #
@@ -22,6 +22,10 @@ on:
     inputs:
       skip_migrations:
         description: 跳过远程 D1 迁移，只重新部署代码
+        type: boolean
+        default: false
+      skip_online_smoke:
+        description: 跳过部署后的线上冒烟测试
         type: boolean
         default: false
 
@@ -162,6 +166,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${D1_DATABASE_ID:-}" ]; then
+            if [[ ! "$D1_DATABASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+              echo "::error title=D1_DATABASE_ID 格式错误::应为 8-4-4-4-12 形式的 UUID，当前值长度 ${#D1_DATABASE_ID}（参见 DEPLOY.md 6.2）"
+              exit 1
+            fi
             sed -i "s/00000000-0000-0000-0000-000000000000/${D1_DATABASE_ID}/" wrangler.jsonc
             echo "已用 Secrets.D1_DATABASE_ID 替换 wrangler.jsonc 中的占位 ID"
           fi
@@ -180,7 +188,19 @@ jobs:
 
       - name: 应用远程 D1 迁移
         if: steps.creds.outputs.ready == 'true' && inputs.skip_migrations != 'true'
-        run: npm run db:migrate:remote
+        run: |
+          set -o pipefail
+          if npm run db:migrate:remote 2>&1 | tee /tmp/migrate.log; then
+            exit 0
+          fi
+          if grep -qE 'Authentication error|10000|9109|Unauthorized|401|403' /tmp/migrate.log; then
+            echo "::error title=D1 权限不足::当前 CLOUDFLARE_API_TOKEN 缺少 Account > D1 > Edit 权限，wrangler 连 D1 API 都会 401。请在 Cloudflare 控制台编辑该 Token 补上 D1 Edit 后重跑（见 DEPLOY.md 6.1）"
+          elif grep -qE 'not found|does not exist|7500' /tmp/migrate.log; then
+            echo "::error title=D1 数据库不存在::wrangler.jsonc 的 database_id（或 Secrets.D1_DATABASE_ID）不是本账户下的真实 id，见 DEPLOY.md 6.2"
+          else
+            echo "::error title=D1 迁移失败::详见上方日志"
+          fi
+          exit 1
 
       - name: 构建前端
         if: steps.creds.outputs.ready == 'true'
@@ -199,5 +219,22 @@ jobs:
             echo ""
             echo "- 线上地址：${url:-见本次运行日志}"
             echo "- Commit：\`${GITHUB_SHA:0:7}\`"
-            echo "- 冒烟测试：45/45 全部通过"
+            echo "- 冒烟测试（本地 e2e）：45/45 全部通过"
+            echo "- 线上冒烟测试：见下一步骤"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 线上冒烟测试（对部署后的地址跑 45 项断言）
+        if: steps.creds.outputs.ready == 'true' && inputs.skip_online_smoke != 'true'
+        env:
+          BASE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_URL:-}" ]; then
+            echo "::warning title=已跳过线上冒烟测试::未能从 wrangler deploy 输出里解析到 workers.dev 地址（使用自定义域名时属正常）"
+            exit 0
+          fi
+          echo "线上目标地址：${BASE_URL}"
+          node scripts/smoke-test.mjs
+          {
+            echo "- 线上冒烟测试（${BASE_URL}）：45/45 全部通过 ✅"
           } >> "$GITHUB_STEP_SUMMARY"

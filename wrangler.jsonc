@@ -20,13 +20,14 @@
   },
 
   // ---- D1 database -------------------------------------------------------
-  // Replace database_id with the id printed by:
-  //   npx wrangler d1 create cloudnotion-db
+  // Created in the Cloudflare dashboard as "cloudnotion-db".
+  // CI runs `wrangler d1 migrations apply cloudnotion-db --remote`, which
+  // resolves the database by name, so keep the name in sync with the console.
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "cloudnotion-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "debb8909-afd9-4529-80ed-37be3ae12bbb",
       "migrations_dir": "migrations"
     }
   ],

@@ -84,7 +84,7 @@ npm run check:routes
 | --- | --- | --- |
 | 1 | `verify` | `npm ci` → `npm run typecheck`（client + worker）→ `npm run check:routes` → `vite build` |
 | 2 | `e2e` | 本地 D1 迁移 → 后台启动 `wrangler dev --local` → 运行 `scripts/smoke-test.mjs`（45 项断言） |
-| 3 | `deploy` | 校验 D1 id → 确保 R2 桶 → `npm run db:migrate:remote` → `vite build` → `wrangler deploy` |
+| 3 | `deploy` | 校验 D1 id → 确保 R2 桶 → `npm run db:migrate:remote` → `vite build` → `wrangler deploy` → 对线上地址跑一遍 45 项冒烟测试 |
 
 ### 6.1 一次性配置 Secrets
 
@@ -105,6 +105,8 @@ npm run check:routes
 
 未配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 时，`deploy` job 会输出 warning 并**跳过部署**（校验与冒烟测试照常跑），流水线不会变红。
 
+> ⚠️ 若日志在「应用远程 D1 迁移」步骤报 `Authentication error [code: 10000]`，说明 Token 少了 `Account · D1 · Edit`——缺这个权限时连 `npx wrangler d1 list` 都会返回 401（工作流现在会对这种失败输出专门的错误提示，不会只丢一段原始日志）。
+
 ### 6.2 首次部署前必须做的一步
 
 `wrangler.jsonc` 的 `database_id` 还是占位符时，流水线会在 `deploy` 阶段以清晰错误停下。二选一：
@@ -115,11 +117,16 @@ npx wrangler d1 create cloudnotion-db
 # 方案 B：不改代码，把 id 存成 GitHub Secret：D1_DATABASE_ID
 ```
 
+也可以在 Cloudflare 控制台 **Storage & Databases → D1 SQL Database → Create** 建库（数据库名必须填 `cloudnotion-db`，工作流是按这个名字执行迁移的），再把列表里的 **Database ID** 回填到 `wrangler.jsonc` 的 `database_id`，或存成 `D1_DATABASE_ID` Secret（工作流会校验其 UUID 格式）。
+
 R2 桶无需手动建，工作流会执行 `wrangler r2 bucket create cloudnotion-files`（已存在则跳过）。
 
 ### 6.3 手动触发 / 跳过迁移
 
-Actions → Deploy → Run workflow，可勾选 `skip_migrations`：只重新部署代码，不动数据库。
+Actions → Deploy → Run workflow，可勾选：
+
+- `skip_migrations`：只重新部署代码，不动数据库
+- `skip_online_smoke`：跳过部署后的线上冒烟测试（临时排障用）
 
 ### 6.4 状态徽章
 
