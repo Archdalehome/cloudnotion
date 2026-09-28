@@ -220,7 +220,6 @@ jobs:
             echo "- 线上地址：${url:-见本次运行日志}"
             echo "- Commit：\`${GITHUB_SHA:0:7}\`"
             echo "- 冒烟测试（本地 e2e）：45/45 全部通过"
-            echo "- 线上冒烟测试：见下一步骤"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 线上冒烟测试（对部署后的地址跑 45 项断言）
@@ -231,10 +230,9 @@ jobs:
           set -euo pipefail
           if [ -z "${BASE_URL:-}" ]; then
             echo "::warning title=已跳过线上冒烟测试::未能从 wrangler deploy 输出里解析到 workers.dev 地址（使用自定义域名时属正常）"
+            echo "- 线上冒烟测试：已跳过（未解析到 workers.dev 地址）" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           echo "线上目标地址：${BASE_URL}"
           node scripts/smoke-test.mjs
-          {
-            echo "- 线上冒烟测试（${BASE_URL}）：45/45 全部通过 ✅"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "- 线上冒烟测试（${BASE_URL}）：45/45 全部通过 ✅" >> "$GITHUB_STEP_SUMMARY"
