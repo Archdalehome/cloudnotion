@@ -73,7 +73,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     );
   }, [database]);
 
-  const { properties, views, members, shares } = detail;
+  const { properties, views, members } = detail;
   const role: Role = detail.role;
   const canEdit = role === 'owner' || role === 'editor';
   const isOwner = role === 'owner';
@@ -472,8 +472,6 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     }
   };
 
-  const applyMembers = (next: typeof members) => setDetail((prev) => ({ ...prev, members: next }));
-  const applyShares = (next: typeof shares) => setDetail((prev) => ({ ...prev, shares: next }));
   const applyViewShares = (next: ViewShare[]) => setDetail((prev) => ({ ...prev, viewShares: next }));
 
   /* ----------------------------------------------------------------- render */
@@ -514,16 +512,6 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
           ) : null}
           <span className="spacer" />
           <span className="small muted">{members.length} 位成员 · {total} 条记录</span>
-          <button
-            type="button"
-            className="btn ghost small"
-            onClick={() => {
-              setShareViewId(null);
-              setShareOpen(true);
-            }}
-          >
-            分享与成员
-          </button>
           {isOwner ? (
             <button type="button" className="btn ghost small danger" onClick={() => void deleteDatabase()}>
               删除表格
@@ -687,8 +675,6 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
             setShareViewId(null);
           }}
           onToast={onToast}
-          onMembers={applyMembers}
-          onShares={applyShares}
           onViewShares={applyViewShares}
         />
       ) : null}
