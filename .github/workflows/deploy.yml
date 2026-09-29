@@ -234,7 +234,7 @@ jobs:
             echo "- 冒烟测试（本地 e2e）：见上面 e2e job 的摘要"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 线上冒烟测试（对部署后的地址跑 45 项断言）
+      - name: 线上冒烟测试（对部署后的真实地址跑完整断言）
         if: steps.creds.outputs.ready == 'true' && inputs.skip_online_smoke != 'true'
         env:
           BASE_URL: ${{ steps.deploy.outputs.url }}
