@@ -19,6 +19,7 @@ export function Sidebar({ appName, user, databases, activeId, onSelect, onCreate
   const [templateId, setTemplateId] = useState(TEMPLATES[1]?.id ?? 'blank');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const sharedDatabases = databases.filter((database) => database.sharedViewNames.length > 0);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -98,12 +99,48 @@ export function Sidebar({ appName, user, databases, activeId, onSelect, onCreate
             >
               <span>{database.icon || '📋'}</span>
               <span className="label">{database.name}</span>
-              {database.role !== 'owner' ? <span className="small muted">{database.role === 'editor' ? '协作' : '只读'}</span> : null}
+              {database.locked ? (
+                <span className="small muted" title="结构已锁定">
+                  🔒
+                </span>
+              ) : null}
+              {database.role !== 'owner' ? (
+                <span className="small muted">{database.role === 'editor' ? '协作' : '只读'}</span>
+              ) : null}
             </button>
           ))
         ) : (
           <p className="small muted" style={{ padding: '0 12px' }}>
             还没有表格，点击右上角 ＋ 新建。
+          </p>
+        )}
+      </div>
+
+      <div className="sidebar-section">
+        <div className="row">
+          <span>分享表格</span>
+          <span className="spacer" />
+          <span className="small muted">{sharedDatabases.length ? sharedDatabases.length : ''}</span>
+        </div>
+      </div>
+
+      <div className="sidebar-list shared">
+        {sharedDatabases.length ? (
+          sharedDatabases.map((database) => (
+            <button
+              key={`shared-${database.id}`}
+              type="button"
+              className={`sidebar-item${database.id === activeId ? ' active' : ''}`}
+              onClick={() => onSelect(database.id)}
+              title={`分享视图：${database.sharedViewNames.join('、')}`}
+            >
+              <span>🔗</span>
+              <span className="label">{database.name}</span>
+            </button>
+          ))
+        ) : (
+          <p className="small muted" style={{ padding: '0 12px' }}>
+            暂无他人分享给你的视图。
           </p>
         )}
       </div>

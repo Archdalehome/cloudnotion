@@ -30,6 +30,8 @@ function summaryOf(detail: DatabaseDetail): DatabaseSummary {
     description: detail.description,
     ownerId: detail.ownerId,
     role: detail.role,
+    locked: detail.locked,
+    sharedViewNames: detail.viewScoped ? detail.views.map((view) => view.name) : [],
     createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,
     rowCount: detail.total,

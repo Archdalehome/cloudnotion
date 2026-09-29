@@ -10,14 +10,16 @@ import type {
   SelectOption,
   ViewDef,
 } from '../../shared/types';
+import { rowMatchesView } from '../../shared/viewFilter';
 import { defaultViewConfig } from '../../shared/views';
-import { requireDatabaseAccess } from '../access';
+import { requireDatabaseAccess, type DatabaseAccess } from '../access';
 import { requireUser } from '../auth';
 import {
   asEnum,
   asString,
   badRequest,
   conflict,
+  forbidden,
   json,
   newId,
   normalizeEmail,
@@ -35,11 +37,14 @@ import {
   recordFromRow,
   shareFromRow,
   viewFromRow,
+  viewShareFromRow,
 } from '../mappers';
 import type { Env, RequestContext, Route } from '../types';
 
 const DEFAULT_PAGE_SIZE = 200;
 const MAX_PAGE_SIZE = 1000;
+/** how many rows a view-only share scans before applying the view filters */
+const SCOPED_ROW_SCAN = 5000;
 
 export function clampLimit(url: URL): number {
   const raw = Number(url.searchParams.get('limit'));
@@ -52,22 +57,88 @@ export function clampOffset(url: URL): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
-/** All databases the user owns or has been invited to. */
+/** All databases the user owns, has been invited to or received a view share for. */
 export async function listDatabases(env: Env, userId: string): Promise<DatabaseSummary[]> {
-  const { results } = await env.DB.prepare(
-    `SELECT d.id, d.name, d.icon, d.description, d.owner_id, d.created_at, d.updated_at,
-            u.name AS owner_name,
-            (SELECT COUNT(*) FROM records r WHERE r.database_id = d.id AND r.is_archived = 0) AS record_count,
-            CASE WHEN d.owner_id = ? THEN 'owner' ELSE COALESCE(m.role, 'viewer') END AS role
-       FROM databases d
-       JOIN users u ON u.id = d.owner_id
-       LEFT JOIN database_members m ON m.database_id = d.id AND m.user_id = ?
-      WHERE d.is_archived = 0 AND (d.owner_id = ? OR m.id IS NOT NULL)
-      ORDER BY d.updated_at DESC`,
-  )
-    .bind(userId, userId, userId)
-    .all<SqlRow>();
-  return (results ?? []).map((row) => databaseSummaryFromRow(row, sqlString(row, 'role', 'viewer') as Role));
+  const [{ results }, { results: sharedRows }] = await Promise.all([
+    env.DB.prepare(
+      `SELECT d.id, d.name, d.icon, d.description, d.owner_id, d.is_locked, d.created_at, d.updated_at,
+              u.name AS owner_name,
+              (SELECT COUNT(*) FROM records r WHERE r.database_id = d.id AND r.is_archived = 0) AS record_count,
+              CASE WHEN d.owner_id = ? THEN 'owner'
+                   ELSE COALESCE(m.role, s.role, 'viewer') END AS role
+         FROM databases d
+         JOIN users u ON u.id = d.owner_id
+         LEFT JOIN database_members m ON m.database_id = d.id AND m.user_id = ?
+         LEFT JOIN (SELECT vs.database_id, MIN(vs.role) AS role FROM view_shares vs
+                     WHERE vs.user_id = ? GROUP BY vs.database_id) s ON s.database_id = d.id
+        WHERE d.is_archived = 0 AND (d.owner_id = ? OR m.id IS NOT NULL OR s.database_id IS NOT NULL)
+        ORDER BY d.updated_at DESC`,
+    )
+      .bind(userId, userId, userId, userId)
+      .all<SqlRow>(),
+    env.DB.prepare(
+      `SELECT vs.database_id, v.name AS view_name
+         FROM view_shares vs JOIN views v ON v.id = vs.view_id
+        WHERE vs.user_id = ?
+        ORDER BY v.position ASC, vs.created_at ASC`,
+    )
+      .bind(userId)
+      .all<SqlRow>(),
+  ]);
+
+  const sharedViewNames = new Map<string, string[]>();
+  for (const row of sharedRows ?? []) {
+    const databaseId = sqlString(row, 'database_id');
+    const list = sharedViewNames.get(databaseId) ?? [];
+    list.push(sqlString(row, 'view_name'));
+    sharedViewNames.set(databaseId, list);
+  }
+
+  return (results ?? []).map((row) =>
+    databaseSummaryFromRow(
+      row,
+      sqlString(row, 'role', 'viewer') as Role,
+      sharedViewNames.get(sqlString(row, 'id')) ?? [],
+    ),
+  );
+}
+
+/** Union of the fields that the given (shared) views expose. */
+function scopedProperties(properties: Property[], views: ViewDef[]): Property[] {
+  if (!views.some((view) => view.config.visibleProperties)) return properties;
+  const allowed = new Set<string>();
+  for (const view of views) {
+    for (const propertyId of view.config.visibleProperties ?? []) allowed.add(propertyId);
+  }
+  return properties.filter((property) => allowed.has(property.id));
+}
+
+/** Rows a view-scoped member may see: the union of every view they were given. */
+export async function visibleRecords(
+  env: Env,
+  databaseId: string,
+  viewIds: string[] | null,
+  limit: number,
+  offset: number,
+): Promise<{ rows: RowRecord[]; total: number }> {
+  if (!viewIds?.length) {
+    const [rows, total] = await Promise.all([
+      loadRecords(env, databaseId, limit, offset),
+      countRecords(env, databaseId),
+    ]);
+    return { rows, total };
+  }
+
+  const [properties, views, scanned] = await Promise.all([
+    loadProperties(env, databaseId),
+    loadViews(env, databaseId, viewIds),
+    loadRecords(env, databaseId, SCOPED_ROW_SCAN, 0),
+  ]);
+  if (!views.length) return { rows: [], total: 0 };
+
+  const visibleProperties = scopedProperties(properties, views);
+  const rows = scanned.filter((row) => views.some((view) => rowMatchesView(visibleProperties, row, view.config)));
+  return { rows: rows.slice(offset, offset + limit), total: rows.length };
 }
 
 export async function loadProperties(env: Env, databaseId: string): Promise<Property[]> {
@@ -79,13 +150,15 @@ export async function loadProperties(env: Env, databaseId: string): Promise<Prop
   return (results ?? []).map(propertyFromRow);
 }
 
-export async function loadViews(env: Env, databaseId: string): Promise<ViewDef[]> {
+export async function loadViews(env: Env, databaseId: string, viewIds?: string[] | null): Promise<ViewDef[]> {
   const { results } = await env.DB.prepare(
     'SELECT * FROM views WHERE database_id = ? ORDER BY position ASC, created_at ASC',
   )
     .bind(databaseId)
     .all<SqlRow>();
-  return (results ?? []).map(viewFromRow);
+  const views = (results ?? []).map(viewFromRow);
+  if (!viewIds?.length) return views;
+  return views.filter((view) => viewIds.includes(view.id));
 }
 
 export async function loadRecords(
@@ -311,10 +384,25 @@ export async function loadShares(env: Env, databaseId: string) {
   return (results ?? []).map(shareFromRow);
 }
 
+/** Every view (定向分享) handed to an individual user, newest view first. */
+export async function loadViewShares(env: Env, databaseId: string) {
+  const { results } = await env.DB.prepare(
+    `SELECT vs.*, v.name AS view_name, v.position AS view_position, u.email, u.name
+       FROM view_shares vs
+       JOIN views v ON v.id = vs.view_id
+       JOIN users u ON u.id = vs.user_id
+      WHERE vs.database_id = ?
+      ORDER BY v.position ASC, vs.created_at ASC`,
+  )
+    .bind(databaseId)
+    .all<SqlRow>();
+  return (results ?? []).map(viewShareFromRow);
+}
+
 export async function buildDatabaseDetail(
   env: Env,
   databaseId: string,
-  role: Role,
+  access: Pick<DatabaseAccess, 'role' | 'viewIds'>,
   url: URL,
 ): Promise<DatabaseDetail> {
   const row = await env.DB.prepare(
@@ -328,14 +416,18 @@ export async function buildDatabaseDetail(
 
   const limit = clampLimit(url);
   const offset = clampOffset(url);
-  const [properties, views, rows, total, members, shares] = await Promise.all([
+  const scoped = Boolean(access.viewIds?.length);
+  const [allProperties, allViews, page, members, shares, viewShares] = await Promise.all([
     loadProperties(env, databaseId),
     loadViews(env, databaseId),
-    loadRecords(env, databaseId, limit, offset),
-    countRecords(env, databaseId),
+    visibleRecords(env, databaseId, access.viewIds, limit, offset),
     loadMembers(env, databaseId),
     loadShares(env, databaseId),
+    loadViewShares(env, databaseId),
   ]);
+
+  const views = scoped ? allViews.filter((view) => access.viewIds?.includes(view.id)) : allViews;
+  const properties = scoped ? scopedProperties(allProperties, views) : allProperties;
 
   return {
     id: databaseId,
@@ -343,17 +435,25 @@ export async function buildDatabaseDetail(
     icon: sqlString(row, 'icon', '📋'),
     description: sqlString(row, 'description'),
     ownerId: sqlString(row, 'owner_id'),
-    role,
+    role: access.role,
+    locked: sqlNumber(row, 'is_locked') === 1,
+    viewScoped: scoped,
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
     properties,
     views,
     members,
     shares,
-    rows,
-    total,
-    hasMore: offset + rows.length < total,
+    viewShares,
+    rows: page.rows,
+    total: page.total,
+    hasMore: offset + page.rows.length < page.total,
   };
+}
+
+/** Synthetic access object for the just-created table of `ownerId`. */
+export function ownerAccess(databaseId: string, ownerId: string): DatabaseAccess {
+  return { databaseId, ownerId, role: 'owner', locked: false, viewIds: null };
 }
 
 export async function touchDatabase(env: Env, databaseId: string): Promise<void> {
@@ -387,24 +487,23 @@ async function createHandler(ctx: RequestContext): Promise<Response> {
   if (!TEMPLATES.some((template) => template.id === templateId)) throw notFound('模板不存在');
 
   const created = await createDatabase(ctx.env, user.id, { name, icon, description, templateId });
-  return json(await buildDatabaseDetail(ctx.env, created.databaseId, 'owner', ctx.url), { status: 201 });
+  return json(await buildDatabaseDetail(ctx.env, created.databaseId, ownerAccess(created.databaseId, user.id), ctx.url), {
+    status: 201,
+  });
 }
 
 async function detailHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
-  return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access.role, ctx.url));
+  return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access, ctx.url));
 }
 
 async function recordsPageHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
-  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
+  const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
   const limit = clampLimit(ctx.url);
   const offset = clampOffset(ctx.url);
-  const [rows, total] = await Promise.all([
-    loadRecords(ctx.env, ctx.params.id, limit, offset),
-    countRecords(ctx.env, ctx.params.id),
-  ]);
+  const { rows, total } = await visibleRecords(ctx.env, ctx.params.id, access.viewIds, limit, offset);
   return json({ rows, total, hasMore: offset + rows.length < total });
 }
 
@@ -427,14 +526,19 @@ async function updateHandler(ctx: RequestContext): Promise<Response> {
     fields.push('description = ?');
     values.push(asString(body.description, '描述', { max: 500 }));
   }
-  if (!fields.length) return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access.role, ctx.url));
+  if (body.locked !== undefined) {
+    if (access.role !== 'owner') throw forbidden('只有所有者可以锁定或解锁表格');
+    fields.push('is_locked = ?');
+    values.push(body.locked ? 1 : 0);
+  }
+  if (!fields.length) return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access, ctx.url));
 
   fields.push('updated_at = ?');
   values.push(Date.now(), ctx.params.id);
   await ctx.env.DB.prepare(`UPDATE databases SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...values)
     .run();
-  return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access.role, ctx.url));
+  return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access, ctx.url));
 }
 
 async function deleteHandler(ctx: RequestContext): Promise<Response> {
@@ -545,6 +649,48 @@ async function deleteShareHandler(ctx: RequestContext): Promise<Response> {
   return json({ shares: await loadShares(ctx.env, databaseId) });
 }
 
+async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'manage');
+  const body = await readJson(ctx.request);
+  const viewId = asString(body.viewId, '视图', { required: true, max: 64 });
+  const role = asEnum(body.role ?? 'viewer', ['viewer', 'editor'] as const, '角色');
+  const email = normalizeEmail(body.email);
+
+  const view = await ctx.env.DB.prepare('SELECT id FROM views WHERE id = ? AND database_id = ?')
+    .bind(viewId, ctx.params.id)
+    .first<SqlRow>();
+  if (!view) throw notFound('视图不存在');
+
+  const target = await ctx.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first<SqlRow>();
+  if (!target) throw notFound('该邮箱尚未注册，请先让对方注册账号');
+  const targetId = sqlString(target, 'id');
+  if (targetId === access.ownerId) throw conflict('所有者已经拥有该表格');
+
+  await ctx.env.DB.prepare(
+    `INSERT INTO view_shares (id, database_id, view_id, user_id, role, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (view_id, user_id) DO UPDATE SET role = excluded.role`,
+  )
+    .bind(newId(), ctx.params.id, viewId, targetId, role, user.id, Date.now())
+    .run();
+
+  await touchDatabase(ctx.env, ctx.params.id);
+  return json({ viewShares: await loadViewShares(ctx.env, ctx.params.id) }, { status: 201 });
+}
+
+async function deleteViewShareHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const row = await ctx.env.DB.prepare('SELECT database_id FROM view_shares WHERE id = ?')
+    .bind(ctx.params.id)
+    .first<SqlRow>();
+  if (!row) throw notFound('视图分享不存在');
+  const databaseId = sqlString(row, 'database_id');
+  await requireDatabaseAccess(ctx.env, databaseId, user, 'manage');
+  await ctx.env.DB.prepare('DELETE FROM view_shares WHERE id = ?').bind(ctx.params.id).run();
+  return json({ viewShares: await loadViewShares(ctx.env, databaseId) });
+}
+
 export const databaseRoutes: Route[] = [
   { method: 'GET', path: '/api/databases', handler: listHandler },
   { method: 'POST', path: '/api/databases', handler: createHandler },
@@ -557,6 +703,8 @@ export const databaseRoutes: Route[] = [
   { method: 'DELETE', path: '/api/members/:id', handler: removeMemberHandler },
   { method: 'POST', path: '/api/databases/:id/shares', handler: createShareHandler },
   { method: 'DELETE', path: '/api/shares/:id', handler: deleteShareHandler },
+  { method: 'POST', path: '/api/databases/:id/view-shares', handler: createViewShareHandler },
+  { method: 'DELETE', path: '/api/view-shares/:id', handler: deleteViewShareHandler },
 ];
 
 

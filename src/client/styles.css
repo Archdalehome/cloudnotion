@@ -927,6 +927,22 @@ textarea.input {
   min-height: 0;
 }
 
+/* ------------------------------------------------- view toolbar (筛选) */
+
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 0;
+}
+
+/* the filter panel is anchored to the left edge of its trigger */
+.view-toolbar .popover {
+  left: 0;
+  right: auto;
+  width: 420px;
+}
+
 .icon-input {
   width: 42px;
   padding: 2px 4px;

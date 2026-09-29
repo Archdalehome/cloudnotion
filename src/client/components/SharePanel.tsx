@@ -1,16 +1,19 @@
-/** Members + public share links panel (owner only for management actions). */
+/** Members + public share links + view level sharing panel (owner only for management actions). */
 import { useState } from 'react';
-import type { DatabaseDetail, Member, Role, Share } from '../../shared/types';
+import type { DatabaseDetail, Member, Role, Share, ViewDef, ViewShare } from '../../shared/types';
 import { ApiError, api } from '../api';
 import { Modal } from './Modal';
 
 interface SharePanelProps {
   database: DatabaseDetail;
   canManage: boolean;
+  /** preselected view when opened from the "分享" button of a view */
+  focusViewId?: string | null;
   onClose: () => void;
   onToast: (message: string, kind?: 'info' | 'error') => void;
   onMembers: (members: Member[]) => void;
   onShares: (shares: Share[]) => void;
+  onViewShares: (shares: ViewShare[]) => void;
 }
 
 const ROLE_LABEL: Record<Role, string> = { owner: '所有者', editor: '可编辑', viewer: '可查看' };
@@ -19,11 +22,23 @@ function shareLink(token: string): string {
   return `${window.location.origin}/share/${token}`;
 }
 
-export function SharePanel({ database, canManage, onClose, onToast, onMembers, onShares }: SharePanelProps) {
+export function SharePanel({
+  database,
+  canManage,
+  focusViewId,
+  onClose,
+  onToast,
+  onMembers,
+  onShares,
+  onViewShares,
+}: SharePanelProps) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'editor' | 'viewer'>('editor');
   const [permission, setPermission] = useState<'view' | 'edit'>('view');
   const [expiresInDays, setExpiresInDays] = useState('0');
+  const [viewId, setViewId] = useState(focusViewId ?? database.views[0]?.id ?? '');
+  const [viewEmail, setViewEmail] = useState('');
+  const [viewRole, setViewRole] = useState<'editor' | 'viewer'>('viewer');
   const [busy, setBusy] = useState(false);
 
   const run = async (action: () => Promise<void>, fallback: string) => {
@@ -76,6 +91,24 @@ export function SharePanel({ database, canManage, onClose, onToast, onMembers, o
       onShares(result.shares);
     }, '删除分享链接失败');
 
+  /** 定向分享：只把某一个视图（含其筛选与可见字段）分享给指定账号。 */
+  const addViewShare = () =>
+    run(async () => {
+      const target = viewEmail.trim();
+      if (!target || !viewId) return;
+      const result = await api.createViewShare(database.id, { viewId, email: target, role: viewRole });
+      onViewShares(result.viewShares);
+      setViewEmail('');
+      onToast('视图已定向分享');
+    }, '视图分享失败');
+
+  const removeViewShare = (share: ViewShare) =>
+    run(async () => {
+      const result = await api.deleteViewShare(share.id);
+      onViewShares(result.viewShares);
+      onToast('已取消该视图分享');
+    }, '移除视图分享失败');
+
   const copy = async (token: string) => {
     const link = shareLink(token);
     try {
@@ -111,6 +144,21 @@ export function SharePanel({ database, canManage, onClose, onToast, onMembers, o
           onCreate={createShare}
           onRemove={removeShare}
           onCopy={copy}
+        />
+      ) : null}
+      {canManage ? (
+        <ShareViews
+          views={database.views}
+          viewShares={database.viewShares}
+          viewId={viewId}
+          email={viewEmail}
+          role={viewRole}
+          busy={busy}
+          onView={setViewId}
+          onEmail={setViewEmail}
+          onRole={setViewRole}
+          onAdd={addViewShare}
+          onRemove={removeViewShare}
         />
       ) : null}
     </Modal>
@@ -287,6 +335,102 @@ function ShareLinks({
           生成链接
         </button>
       </div>
+    </div>
+  );
+}
+
+
+interface ShareViewsProps {
+  views: ViewDef[];
+  viewShares: ViewShare[];
+  viewId: string;
+  email: string;
+  role: 'editor' | 'viewer';
+  busy: boolean;
+  onView: (value: string) => void;
+  onEmail: (value: string) => void;
+  onRole: (value: 'editor' | 'viewer') => void;
+  onAdd: () => void;
+  onRemove: (share: ViewShare) => void;
+}
+
+/** 视图定向分享：把单个视图（含筛选与字段可见性）分享给某个已注册账号。 */
+function ShareViews({
+  views,
+  viewShares,
+  viewId,
+  email,
+  role,
+  busy,
+  onView,
+  onEmail,
+  onRole,
+  onAdd,
+  onRemove,
+}: ShareViewsProps) {
+  return (
+    <div className="form-section">
+      <h4>视图定向分享</h4>
+      <p className="small muted">被分享者只会看到这一个视图及其中的数据，其他视图与不可见字段不会暴露。</p>
+
+      <div className="center-list">
+        {viewShares.length ? (
+          viewShares.map((share) => (
+            <div className="row gap" key={share.id}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="small">
+                  {share.viewName} · {share.email}
+                </div>
+                <div className="small muted">
+                  {share.name ? `${share.name} · ` : ''}
+                  {ROLE_LABEL[share.role]}
+                </div>
+              </div>
+              <button type="button" className="btn ghost small" disabled={busy} onClick={() => onRemove(share)}>
+                取消分享
+              </button>
+            </div>
+          ))
+        ) : (
+          <p className="small muted">还没有视图定向分享。</p>
+        )}
+      </div>
+
+      <form
+        className="row gap"
+        style={{ marginTop: 12 }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onAdd();
+        }}
+      >
+        <select className="input" style={{ width: 150 }} value={viewId} onChange={(event) => onView(event.target.value)}>
+          {views.map((view) => (
+            <option key={view.id} value={view.id}>
+              {view.name}
+            </option>
+          ))}
+        </select>
+        <input
+          className="input"
+          type="email"
+          placeholder="对方邮箱"
+          value={email}
+          onChange={(event) => onEmail(event.target.value)}
+        />
+        <select
+          className="input"
+          style={{ width: 110 }}
+          value={role}
+          onChange={(event) => onRole(event.target.value as 'editor' | 'viewer')}
+        >
+          <option value="viewer">可查看</option>
+          <option value="editor">可编辑</option>
+        </select>
+        <button className="btn primary small" type="submit" disabled={busy || !email.trim() || !viewId}>
+          分享视图
+        </button>
+      </form>
     </div>
   );
 }

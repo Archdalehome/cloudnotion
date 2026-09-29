@@ -10,6 +10,7 @@ import type {
   RowValues,
   Share,
   ViewDef,
+  ViewShare,
   ViewType,
 } from '../shared/types';
 import { mergeViewConfig } from '../shared/views';
@@ -50,6 +51,7 @@ export function viewFromRow(row: SqlRow): ViewDef {
     name: sqlString(row, 'name'),
     type,
     config: mergeViewConfig(type, parseJsonObject(row.config, {})),
+    locked: sqlNumber(row, 'is_locked') === 1,
     position: sqlNumber(row, 'position'),
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
@@ -79,7 +81,7 @@ export function shareFromRow(row: SqlRow): Share {
   };
 }
 
-export function databaseSummaryFromRow(row: SqlRow, role: Role): DatabaseSummary {
+export function databaseSummaryFromRow(row: SqlRow, role: Role, sharedViewNames: string[] = []): DatabaseSummary {
   return {
     id: sqlString(row, 'id'),
     name: sqlString(row, 'name'),
@@ -88,8 +90,24 @@ export function databaseSummaryFromRow(row: SqlRow, role: Role): DatabaseSummary
     ownerId: sqlString(row, 'owner_id'),
     ownerName: sqlNullableString(row, 'owner_name') ?? undefined,
     role,
+    locked: sqlNumber(row, 'is_locked') === 1,
+    sharedViewNames,
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
     rowCount: row.record_count === undefined ? undefined : sqlNumber(row, 'record_count'),
+  };
+}
+
+export function viewShareFromRow(row: SqlRow): ViewShare {
+  return {
+    id: sqlString(row, 'id'),
+    databaseId: sqlString(row, 'database_id'),
+    viewId: sqlString(row, 'view_id'),
+    viewName: sqlString(row, 'view_name'),
+    userId: sqlString(row, 'user_id'),
+    email: sqlString(row, 'email'),
+    name: sqlString(row, 'name'),
+    role: sqlString(row, 'role', 'viewer') === 'editor' ? 'editor' : 'viewer',
+    createdAt: sqlNumber(row, 'created_at'),
   };
 }

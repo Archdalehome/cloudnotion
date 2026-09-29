@@ -112,7 +112,19 @@ jobs:
           exit 1
 
       - name: 运行冒烟测试
-        run: node scripts/smoke-test.mjs
+        run: |
+          set -o pipefail
+          node scripts/smoke-test.mjs 2>&1 | tee /tmp/smoke.log
+
+      - name: 写入冒烟测试摘要
+        if: always()
+        run: |
+          count="$(grep -Eo '[0-9]+/[0-9]+ checks passed' /tmp/smoke.log | tail -n 1 || true)"
+          {
+            echo "### 端到端冒烟测试（本地 Worker）"
+            echo ""
+            echo "- 断言结果：${count:-未生成结果（见上方日志）}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 打印 Worker 日志（失败时）
         if: failure()
@@ -219,7 +231,7 @@ jobs:
             echo ""
             echo "- 线上地址：${url:-见本次运行日志}"
             echo "- Commit：\`${GITHUB_SHA:0:7}\`"
-            echo "- 冒烟测试（本地 e2e）：45/45 全部通过"
+            echo "- 冒烟测试（本地 e2e）：见上面 e2e job 的摘要"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 线上冒烟测试（对部署后的地址跑 45 项断言）
@@ -234,5 +246,6 @@ jobs:
             exit 0
           fi
           echo "线上目标地址：${BASE_URL}"
-          node scripts/smoke-test.mjs
-          echo "- 线上冒烟测试（${BASE_URL}）：45/45 全部通过 ✅" >> "$GITHUB_STEP_SUMMARY"
+          node scripts/smoke-test.mjs 2>&1 | tee /tmp/smoke-online.log
+          count="$(grep -Eo '[0-9]+/[0-9]+ checks passed' /tmp/smoke-online.log | tail -n 1 || true)"
+          echo "- 线上冒烟测试（${BASE_URL}）：${count:-已通过 ✅}" >> "$GITHUB_STEP_SUMMARY"

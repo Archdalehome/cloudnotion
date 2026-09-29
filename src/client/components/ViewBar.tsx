@@ -1,294 +1,49 @@
+/**
+ * View tabs + the view level toolbar (设置 / 表格锁定 / 分享 / ⋯).
+ * Filter conditions are edited from the "＋ 新建筛选" button rendered above the
+ * view body (see DatabasePage) and from the "＋ 新建视图" form below.
+ */
 import { useState } from 'react';
-import { FIELD_META, createId, defaultOperatorForType, operatorsForType, operatorsNeedValue } from '../../shared/fields';
+import { FIELD_META } from '../../shared/fields';
 import { VIEW_TYPE_LABEL } from '../../shared/views';
-import type {
-  FilterCondition,
-  FilterOperator,
-  Property,
-  SortRule,
-  ViewConfig,
-  ViewDef,
-  ViewType,
-} from '../../shared/types';
+import type { Filters, Property, ViewConfig, ViewDef, ViewType } from '../../shared/types';
+import { FilterPanel, emptyFilters } from './FilterPanel';
 import { Popover } from './Popover';
+
+/** Payload of the "＋ 新建视图" form: 自定义名称 / 筛选 / 锁定 / 定向分享. */
+export interface NewViewInput {
+  type: ViewType;
+  name: string;
+  filters: Filters;
+  locked: boolean;
+  share?: { email: string; role: 'editor' | 'viewer' };
+}
 
 interface ViewBarProps {
   views: ViewDef[];
   active: ViewDef;
   properties: Property[];
+  /** the active view may be renamed / reconfigured / deleted (false once locked) */
   canEdit: boolean;
+  /** may lock / unlock the active view (owner or editor of an unlocked table) */
+  canUnlock: boolean;
+  /** owner only actions: 表格锁定 + 视图定向分享 */
+  canManage: boolean;
+  /** the table structure is locked (fields / views are read-only) */
+  structureLocked: boolean;
   total: number;
   rowCount: number;
   onSelectView: (id: string) => void;
-  onCreateView: (type: ViewType) => void;
+  onCreateView: (input: NewViewInput) => void;
   onRenameView: (id: string, name: string) => void;
   onDeleteView: (id: string) => void;
   onUpdateConfig: (patch: Partial<ViewConfig>) => void;
+  onLockView: (id: string, locked: boolean) => void;
+  onLockTable: (locked: boolean) => void;
+  onShareView: (id: string) => void;
 }
 
 const VIEW_ICON: Record<ViewType, string> = { table: '▤', board: '▥', gallery: '▦' };
-
-function valueEditor(
-  property: Property,
-  operator: FilterOperator,
-  value: FilterCondition['value'],
-  onChange: (next: string) => void,
-) {
-  if (!operatorsNeedValue(operator)) return null;
-  if (property.type === 'select' || property.type === 'status' || property.type === 'multi_select') {
-    return (
-      <select className="input" value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}>
-        <option value="">选择…</option>
-        {(property.config.options ?? []).map((option) => (
-          <option key={option.id} value={option.name}>
-            {option.name}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  const inputType =
-    property.type === 'number'
-      ? 'number'
-      : property.type === 'date' || property.type === 'created_time' || property.type === 'updated_time'
-        ? 'date'
-        : 'text';
-  return (
-    <input
-      className="input"
-      type={inputType}
-      value={String(value ?? '')}
-      placeholder="值"
-      onChange={(event) => onChange(event.target.value)}
-    />
-  );
-}
-
-/**
- * Filter conditions grouped by property type; the operator list comes from the
- * shared field metadata so the client and worker stay in sync.
- */
-
-function FilterPanel({
-  properties,
-  config,
-  canEdit,
-  onChange,
-}: {
-  properties: Property[];
-  config: ViewConfig;
-  canEdit: boolean;
-  onChange: (next: ViewConfig['filters']) => void;
-}) {
-  const conditions = config.filters?.conditions ?? [];
-  const propertyOf = (id: string) => properties.find((item) => item.id === id);
-
-  const patch = (id: string, changes: Partial<FilterCondition>) => {
-    onChange({
-      conjunction: config.filters?.conjunction ?? 'and',
-      conditions: conditions.map((condition) => (condition.id === id ? { ...condition, ...changes } : condition)),
-    });
-  };
-
-  const add = () => {
-    const property = properties[0];
-    if (!property) return;
-    onChange({
-      conjunction: config.filters?.conjunction ?? 'and',
-      conditions: [
-        ...conditions,
-        {
-          id: createId(),
-          propertyId: property.id,
-          operator: defaultOperatorForType(property.type),
-          value: '',
-        },
-      ],
-    });
-  };
-
-  const remove = (id: string) => {
-    onChange({
-      conjunction: config.filters?.conjunction ?? 'and',
-      conditions: conditions.filter((condition) => condition.id !== id),
-    });
-  };
-
-  return (
-    <div>
-      <div className="row gap" style={{ marginBottom: 8 }}>
-        <span className="small muted">条件关系</span>
-        <select
-          className="input"
-          style={{ width: 96 }}
-          value={config.filters?.conjunction ?? 'and'}
-          disabled={!canEdit}
-          onChange={(event) =>
-            onChange({
-              conjunction: event.target.value === 'or' ? 'or' : 'and',
-              conditions,
-            })
-          }
-        >
-          <option value="and">全部满足</option>
-          <option value="or">任意满足</option>
-        </select>
-      </div>
-
-      {conditions.map((condition) => {
-        const property = propertyOf(condition.propertyId) ?? properties[0];
-        if (!property) return null;
-        return (
-          <div className="filter-row" key={condition.id}>
-            <select
-              className="input"
-              value={property.id}
-              disabled={!canEdit}
-              onChange={(event) => {
-                const next = propertyOf(event.target.value);
-                if (!next) return;
-                patch(condition.id, {
-                  propertyId: next.id,
-                  operator: defaultOperatorForType(next.type),
-                  value: '',
-                });
-              }}
-            >
-              {properties.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input"
-              value={condition.operator}
-              disabled={!canEdit}
-              onChange={(event) => patch(condition.id, { operator: event.target.value as FilterOperator })}
-            >
-              {operatorsForType(property.type).map((operator) => (
-                <option key={operator.value} value={operator.value}>
-                  {operator.label}
-                </option>
-              ))}
-            </select>
-            {valueEditor(property, condition.operator, condition.value, (next) => patch(condition.id, { value: next }))}
-            <button
-              type="button"
-              className="icon-btn"
-              title="删除条件"
-              disabled={!canEdit}
-              onClick={() => remove(condition.id)}
-            >
-              ✕
-            </button>
-          </div>
-        );
-      })}
-
-      <div className="row gap">
-        <button type="button" className="btn ghost small" onClick={add} disabled={!canEdit || !properties.length}>
-          ＋ 添加条件
-        </button>
-        {conditions.length ? (
-          <button
-            type="button"
-            className="btn ghost small"
-            onClick={() => onChange({ conjunction: config.filters?.conjunction ?? 'and', conditions: [] })}
-            disabled={!canEdit}
-          >
-            清空
-          </button>
-        ) : (
-          <span className="small muted">暂无筛选条件</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-
-function SortPanel({
-  properties,
-  config,
-  canEdit,
-  onChange,
-}: {
-  properties: Property[];
-  config: ViewConfig;
-  canEdit: boolean;
-  onChange: (next: SortRule[]) => void;
-}) {
-  const sorts = config.sorts ?? [];
-
-  const add = () => {
-    const used = new Set(sorts.map((rule) => rule.propertyId));
-    const property = properties.find((item) => !used.has(item.id)) ?? properties[0];
-    if (!property) return;
-    onChange([...sorts, { propertyId: property.id, direction: 'asc' }]);
-  };
-
-  return (
-    <div>
-      {sorts.map((rule, index) => (
-        <div className="filter-row" key={`${rule.propertyId}-${index}`}>
-          <select
-            className="input"
-            value={rule.propertyId}
-            disabled={!canEdit}
-            onChange={(event) =>
-              onChange(sorts.map((item, i) => (i === index ? { ...item, propertyId: event.target.value } : item)))
-            }
-          >
-            {properties.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input"
-            style={{ width: 96 }}
-            value={rule.direction}
-            disabled={!canEdit}
-            onChange={(event) =>
-              onChange(
-                sorts.map((item, i) =>
-                  i === index ? { ...item, direction: event.target.value === 'desc' ? 'desc' : 'asc' } : item,
-                ),
-              )
-            }
-          >
-            <option value="asc">升序</option>
-            <option value="desc">降序</option>
-          </select>
-          <button
-            type="button"
-            className="icon-btn"
-            title="删除排序"
-            disabled={!canEdit}
-            onClick={() => onChange(sorts.filter((_, i) => i !== index))}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
-      <div className="row gap">
-        <button type="button" className="btn ghost small" onClick={add} disabled={!canEdit || !properties.length}>
-          ＋ 添加排序
-        </button>
-        {sorts.length ? (
-          <button type="button" className="btn ghost small" onClick={() => onChange([])} disabled={!canEdit}>
-            清空
-          </button>
-        ) : (
-          <span className="small muted">默认按手动顺序排列</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 
 function SettingsPanel({
   view,
@@ -408,12 +163,114 @@ function SettingsPanel({
   );
 }
 
+/** "＋ 新建视图" form: name, type, conditions, lock and optional view share. */
+function NewViewForm({
+  properties,
+  canShare,
+  onCancel,
+  onSubmit,
+}: {
+  properties: Property[];
+  canShare: boolean;
+  onCancel: () => void;
+  onSubmit: (input: NewViewInput) => void;
+}) {
+  const [type, setType] = useState<ViewType>('table');
+  const [name, setName] = useState('');
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [locked, setLocked] = useState(false);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'editor' | 'viewer'>('viewer');
+
+  return (
+    <div>
+      <label className="field">
+        <span>视图名称</span>
+        <input
+          className="input"
+          value={name}
+          autoFocus
+          placeholder={`默认：${VIEW_TYPE_LABEL[type]}视图`}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+
+      <label className="field">
+        <span>视图类型</span>
+        <select className="input" value={type} onChange={(event) => setType(event.target.value as ViewType)}>
+          {(['table', 'board', 'gallery'] as ViewType[]).map((item) => (
+            <option key={item} value={item}>
+              {VIEW_ICON[item]} {VIEW_TYPE_LABEL[item]}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="menu-label">筛选条件</div>
+      <FilterPanel properties={properties} filters={filters} canEdit onChange={setFilters} />
+
+      <label className="row gap" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={locked} onChange={(event) => setLocked(event.target.checked)} />
+        <span>锁定该视图（锁定后不可重命名、改配置或删除）</span>
+      </label>
+
+      {canShare ? (
+        <>
+          <div className="menu-label">定向分享（可选）</div>
+          <div className="row gap">
+            <input
+              className="input"
+              type="email"
+              placeholder="对方邮箱"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+            <select
+              className="input"
+              style={{ width: 110 }}
+              value={role}
+              onChange={(event) => setRole(event.target.value as 'editor' | 'viewer')}
+            >
+              <option value="viewer">可查看</option>
+              <option value="editor">可编辑</option>
+            </select>
+          </div>
+          <p className="small muted">被分享者只能看到这一个视图及其中的数据。</p>
+        </>
+      ) : null}
+
+      <div className="row gap" style={{ marginTop: 10 }}>
+        <button
+          type="button"
+          className="btn primary small"
+          onClick={() =>
+            onSubmit({
+              type,
+              name: name.trim(),
+              filters,
+              locked,
+              share: canShare && email.trim() ? { email: email.trim(), role } : undefined,
+            })
+          }
+        >
+          创建视图
+        </button>
+        <button type="button" className="btn ghost small" onClick={onCancel}>
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function ViewBar({
   views,
   active,
   properties,
   canEdit,
+  canUnlock,
+  canManage,
+  structureLocked,
   total,
   rowCount,
   onSelectView,
@@ -421,10 +278,12 @@ export function ViewBar({
   onRenameView,
   onDeleteView,
   onUpdateConfig,
+  onLockView,
+  onLockTable,
+  onShareView,
 }: ViewBarProps) {
   const [draftName, setDraftName] = useState(active.name);
   const filterCount = active.config.filters?.conditions.length ?? 0;
-  const sortCount = active.config.sorts?.length ?? 0;
 
   return (
     <div className="viewbar">
@@ -433,99 +292,143 @@ export function ViewBar({
           key={view.id}
           type="button"
           className={`tab${view.id === active.id ? ' active' : ''}`}
+          title={view.locked ? `${view.name}（已锁定）` : view.name}
           onClick={() => {
             setDraftName(view.name);
             onSelectView(view.id);
           }}
         >
-          <span>{VIEW_ICON[view.type]}</span>
-          {view.name}
+          {VIEW_ICON[view.type]} {view.name}
+          {view.locked ? <span className="small muted"> 🔒</span> : null}
         </button>
       ))}
 
-      <Popover label="＋" title="新建视图">
+      <Popover
+        label="＋"
+        title={structureLocked ? '表格已锁定，无法新建视图' : '新建视图'}
+        wide
+        disabled={!canEdit || structureLocked}
+      >
         {(close) => (
-          <div>
-            <div className="menu-label">视图类型</div>
-            {(['table', 'board', 'gallery'] as ViewType[]).map((type) => (
-              <button
-                key={type}
-                type="button"
-                className="menu-item"
-                onClick={() => {
-                  onCreateView(type);
-                  close();
-                }}
-              >
-                <span>{VIEW_ICON[type]}</span>
-                {VIEW_TYPE_LABEL[type]}
-              </button>
-            ))}
-          </div>
+          <NewViewForm
+            properties={properties}
+            canShare={canManage}
+            onCancel={close}
+            onSubmit={(input) => {
+              onCreateView(input);
+              close();
+            }}
+          />
         )}
       </Popover>
 
       <span className="spacer" />
+      {active.locked ? (
+        <span className="badge" title="视图已锁定：名称、筛选与删除均不可修改，可在 ⋯ 中解锁">
+          🔒 视图已锁定
+        </span>
+      ) : null}
       <span className="small muted">
         {rowCount === total ? `${total} 条记录` : `显示 ${rowCount} / 共 ${total} 条`}
+        {filterCount ? ` · 筛选 ${filterCount}` : ''}
       </span>
 
-      <Popover label={`筛选${filterCount ? ` · ${filterCount}` : ''}`} wide>
-        {() => (
-          <FilterPanel
-            properties={properties}
-            config={active.config}
-            canEdit={canEdit}
-            onChange={(filters) => onUpdateConfig({ filters })}
-          />
-        )}
-      </Popover>
-
-      <Popover label={`排序${sortCount ? ` · ${sortCount}` : ''}`}>
-        {() => (
-          <SortPanel
-            properties={properties}
-            config={active.config}
-            canEdit={canEdit}
-            onChange={(sorts) => onUpdateConfig({ sorts })}
-          />
-        )}
-      </Popover>
-
-      <Popover label="设置" wide>
+      <Popover label="设置" wide disabled={!canEdit}>
         {() => <SettingsPanel view={active} properties={properties} canEdit={canEdit} onChange={onUpdateConfig} />}
       </Popover>
 
-      {canEdit ? (
-        <Popover label="⋯" title="当前视图">
+      {canManage ? (
+        <button
+          type="button"
+          className={`btn ghost small${structureLocked ? ' active' : ''}`}
+          title={structureLocked ? '解锁表格结构' : '锁定表格结构（字段与视图不可修改）'}
+          onClick={() => onLockTable(!structureLocked)}
+        >
+          {structureLocked ? '🔒 已锁定' : '🔓 表格锁定'}
+        </button>
+      ) : structureLocked ? (
+        <span className="badge" title="表格结构已锁定">
+          🔒 已锁定
+        </span>
+      ) : null}
+
+      {canManage ? (
+        <button
+          type="button"
+          className="btn ghost small"
+          title="把当前视图定向分享给指定成员"
+          onClick={() => onShareView(active.id)}
+        >
+          分享
+        </button>
+      ) : null}
+
+      {canEdit || (active.locked && canUnlock) ? (
+        <Popover label="⋯" title={active.locked ? '当前视图（已锁定）' : '当前视图'}>
           {(close) => (
             <div>
-              <div className="menu-label">重命名视图</div>
-              <div className="row gap" style={{ padding: '0 8px 8px' }}>
-                <input className="input" value={draftName} onChange={(event) => setDraftName(event.target.value)} />
-                <button
-                  type="button"
-                  className="btn small"
-                  onClick={() => {
-                    const name = draftName.trim();
-                    if (name && name !== active.name) onRenameView(active.id, name);
-                    close();
-                  }}
-                >
-                  保存
-                </button>
-              </div>
+              {canEdit ? (
+                <>
+                  <div className="menu-label">重命名视图</div>
+                  <div className="row gap" style={{ padding: '0 8px 8px' }}>
+                    <input
+                      className="input"
+                      value={draftName}
+                      onChange={(event) => setDraftName(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() => {
+                        const name = draftName.trim();
+                        if (name && name !== active.name) onRenameView(active.id, name);
+                        close();
+                      }}
+                    >
+                      保存
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="menu-label">视图已锁定，解锁后才能改名、调整筛选或删除</div>
+              )}
               <button
                 type="button"
-                className="menu-item danger"
-                disabled={views.length <= 1}
+                className="menu-item"
+                disabled={!canUnlock}
                 onClick={() => {
-                  if (views.length > 1) onDeleteView(active.id);
+                  if (!canUnlock) return;
+                  onLockView(active.id, !active.locked);
                   close();
                 }}
               >
-                🗑 删除此视图
+                {active.locked ? '🔓 解锁视图' : '🔒 锁定视图'}
               </button>
+              {canManage ? (
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    onShareView(active.id);
+                    close();
+                  }}
+                >
+                  🔗 分享此视图
+                </button>
+              ) : null}
+              {canEdit ? (
+                <button
+                  type="button"
+                  className="menu-item danger"
+                  disabled={views.length <= 1}
+                  onClick={() => {
+                    if (views.length > 1) onDeleteView(active.id);
+                    close();
+                  }}
+                >
+                  🗑 删除此视图
+                </button>
+              ) : null}
             </div>
           )}
         </Popover>
@@ -533,4 +436,6 @@ export function ViewBar({
     </div>
   );
 }
+
+
 

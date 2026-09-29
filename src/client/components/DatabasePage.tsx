@@ -16,17 +16,20 @@ import type {
   SessionUser,
   ViewConfig,
   ViewDef,
-  ViewType,
+  ViewShare,
 } from '../../shared/types';
+import { defaultViewConfig } from '../../shared/views';
 import { ApiError, api } from '../api';
 import { applyView, groupRows, visibleProperties } from '../lib/viewEngine';
 import { BoardView, GalleryView } from './CardViews';
 import type { UserNames } from './Cell';
+import { FilterPanel } from './FilterPanel';
+import { Popover } from './Popover';
 import { PropertyDialog } from './PropertyDialog';
 import { RecordDialog } from './RecordDialog';
 import { SharePanel } from './SharePanel';
 import { TableGrid } from './TableGrid';
-import { ViewBar } from './ViewBar';
+import { ViewBar, type NewViewInput } from './ViewBar';
 
 const PAGE_SIZE = 100;
 
@@ -55,6 +58,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const [propertyDialog, setPropertyDialog] = useState<PropertyDialogState>(null);
   const [openRowId, setOpenRowId] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [shareViewId, setShareViewId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState(database.name);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -73,6 +77,11 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const role: Role = detail.role;
   const canEdit = role === 'owner' || role === 'editor';
   const isOwner = role === 'owner';
+  /** 表格锁定：字段与视图结构不可修改 */
+  const structureLocked = detail.locked;
+  /** 仅通过视图定向分享获得的访问权（只能看到被分享的视图） */
+  const viewScoped = detail.viewScoped;
+  const canEditStructure = canEdit && !structureLocked && !viewScoped;
 
   const users = useMemo<UserNames>(() => {
     const map: UserNames = {};
@@ -82,6 +91,9 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   }, [members, me]);
 
   const activeView: ViewDef | null = views.find((view) => view.id === activeViewId) ?? views[0] ?? null;
+  /** 当前视图可改名 / 改配置 / 删除 */
+  const viewEditable = canEditStructure && !!activeView && !activeView.locked;
+  const filterCount = activeView?.config.filters?.conditions.length ?? 0;
   const shownProperties = activeView ? visibleProperties(properties, activeView.config) : properties;
   const filtered = useMemo(
     () => (activeView ? applyView(properties, rows, activeView.config) : rows),
@@ -211,7 +223,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
 
   /* ------------------------------------------------------------------ views */
 
-  const patchView = async (viewId: string, patch: { name?: string; config?: ViewConfig }) => {
+  const patchView = async (viewId: string, patch: { name?: string; config?: ViewConfig; locked?: boolean }) => {
     try {
       const result = await api.updateView(viewId, patch);
       setDetail((prev) => ({ ...prev, views: result.views }));
@@ -221,25 +233,66 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   };
 
   const updateActiveConfig = (patch: Partial<ViewConfig>) => {
-    if (!activeView || !canEdit) return;
+    if (!activeView || !viewEditable) return;
     void patchView(activeView.id, { config: { ...activeView.config, ...patch } });
   };
 
-  const createView = async (type: ViewType) => {
+  /** 新建视图：自定义名称 + 筛选条件 + 锁定 + 可选定向分享。 */
+  const createView = async (input: NewViewInput) => {
+    if (!canEditStructure) return;
     try {
-      const result = await api.createView(detail.id, { type });
+      const result = await api.createView(detail.id, {
+        type: input.type,
+        name: input.name || undefined,
+        config: { ...defaultViewConfig(input.type), filters: input.filters },
+        locked: input.locked,
+      });
       setDetail((prev) => ({ ...prev, views: result.views }));
       setActiveViewId(result.viewId);
+
+      if (input.share) {
+        try {
+          const shared = await api.createViewShare(detail.id, {
+            viewId: result.viewId,
+            email: input.share.email,
+            role: input.share.role,
+          });
+          setDetail((prev) => ({ ...prev, viewShares: shared.viewShares }));
+          onToast(`视图已定向分享给 ${input.share.email}`);
+        } catch (cause) {
+          fail(cause, '视图分享失败');
+        }
+      }
+      onReloadList();
     } catch (cause) {
       fail(cause, '新建视图失败');
     }
   };
 
   const renameView = (viewId: string, name: string) => {
+    if (!viewEditable) return;
     void patchView(viewId, { name });
   };
 
+  const lockView = (viewId: string, locked: boolean) => {
+    if (!canEditStructure) return;
+    void patchView(viewId, { locked });
+  };
+
+  const lockTable = async (locked: boolean) => {
+    if (!isOwner) return;
+    try {
+      const next = await api.updateDatabase(detail.id, { locked });
+      setDetail((prev) => ({ ...prev, locked: next.locked }));
+      onToast(locked ? '表格已锁定，字段与视图不可修改' : '表格已解锁');
+      onReloadList();
+    } catch (cause) {
+      fail(cause, locked ? '锁定表格失败' : '解锁表格失败');
+    }
+  };
+
   const deleteView = async (viewId: string) => {
+    if (!viewEditable) return;
     try {
       const result = await api.deleteView(viewId);
       setDetail((prev) => ({ ...prev, views: result.views }));
@@ -250,13 +303,13 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   };
 
   const addSortFor = (property: Property, direction: 'asc' | 'desc') => {
-    if (!activeView) return;
+    if (!activeView || !viewEditable) return;
     const others = (activeView.config.sorts ?? []).filter((rule) => rule.propertyId !== property.id);
     updateActiveConfig({ sorts: [...others, { propertyId: property.id, direction }] });
   };
 
   const addFilterFor = (property: Property) => {
-    if (!activeView) return;
+    if (!activeView || !viewEditable) return;
     const conditions = activeView.config.filters?.conditions ?? [];
     void patchView(activeView.id, {
       config: {
@@ -278,7 +331,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   };
 
   const hideProperty = (property: Property) => {
-    if (!activeView) return;
+    if (!activeView || !viewEditable) return;
     const visible = (activeView.config.visibleProperties ?? properties.map((item) => item.id)).filter(
       (id) => id !== property.id,
     );
@@ -377,6 +430,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
 
   const applyMembers = (next: typeof members) => setDetail((prev) => ({ ...prev, members: next }));
   const applyShares = (next: typeof shares) => setDetail((prev) => ({ ...prev, shares: next }));
+  const applyViewShares = (next: ViewShare[]) => setDetail((prev) => ({ ...prev, viewShares: next }));
 
   /* ----------------------------------------------------------------- render */
 
@@ -407,9 +461,21 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
           }}
         />
         <span className={`badge role-${role}`}>{ROLE_LABEL[role]}</span>
+        {structureLocked ? (
+          <span className="badge" title="表格结构已锁定">
+            🔒 已锁定
+          </span>
+        ) : null}
         <span className="spacer" />
         <span className="small muted">{members.length} 位成员 · {total} 条记录</span>
-        <button type="button" className="btn ghost small" onClick={() => setShareOpen(true)}>
+        <button
+          type="button"
+          className="btn ghost small"
+          onClick={() => {
+            setShareViewId(null);
+            setShareOpen(true);
+          }}
+        >
           分享与成员
         </button>
         {isOwner ? (
@@ -424,18 +490,54 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
           views={views}
           active={activeView}
           properties={properties}
-          canEdit={canEdit}
+          canEdit={viewEditable}
+          canUnlock={canEditStructure}
+          canManage={isOwner && !viewScoped}
+          structureLocked={structureLocked}
           total={total}
           rowCount={filtered.length}
           onSelectView={(id) => setActiveViewId(id)}
-          onCreateView={(type) => void createView(type)}
+          onCreateView={(input) => void createView(input)}
           onRenameView={renameView}
           onDeleteView={(id) => void deleteView(id)}
           onUpdateConfig={updateActiveConfig}
+          onLockView={lockView}
+          onLockTable={(locked) => void lockTable(locked)}
+          onShareView={(id) => {
+            setShareViewId(id);
+            setShareOpen(true);
+          }}
         />
       ) : null}
 
       <div className="view-body">
+        {activeView ? (
+          <div className="view-toolbar">
+            <Popover
+              label="＋ 新建筛选"
+              title={viewEditable ? '为该视图添加筛选条件（可多条件组合）' : '当前视图不可修改筛选条件'}
+              variant="primary"
+              wide
+              disabled={!viewEditable}
+            >
+              {() => (
+                <FilterPanel
+                  properties={properties}
+                  filters={activeView.config.filters}
+                  canEdit={viewEditable}
+                  onChange={(next) => updateActiveConfig({ filters: next })}
+                />
+              )}
+            </Popover>
+            {filterCount ? (
+              <span className="small muted">
+                {`${activeView.config.filters?.conjunction === 'or' ? '任意满足' : '全部满足'} ${filterCount} 个条件 · 命中 ${filtered.length} 条`}
+              </span>
+            ) : (
+              <span className="small muted">为「{activeView.name}」添加多个筛选条件，支持「全部满足 / 任意满足」</span>
+            )}
+          </div>
+        ) : null}
         {activeView?.type === 'board' ? (
           <BoardView
             properties={properties}
@@ -522,11 +624,16 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       {shareOpen ? (
         <SharePanel
           database={detail}
-          canManage={isOwner}
-          onClose={() => setShareOpen(false)}
+          canManage={isOwner && !viewScoped}
+          focusViewId={shareViewId}
+          onClose={() => {
+            setShareOpen(false);
+            setShareViewId(null);
+          }}
           onToast={onToast}
           onMembers={applyMembers}
           onShares={applyShares}
+          onViewShares={applyViewShares}
         />
       ) : null}
     </section>

@@ -2,9 +2,19 @@
 import { FIELD_META } from '../../shared/fields';
 import type { ViewConfig, ViewDef, ViewType } from '../../shared/types';
 import { defaultViewConfig, mergeViewConfig } from '../../shared/views';
-import { accessForView, requireDatabaseAccess } from '../access';
+import { accessForView, assertStructureEditable, assertViewEditable, requireDatabaseAccess } from '../access';
 import { requireUser } from '../auth';
-import { asEnum, asNumberValue, badRequest, json, newId, notFound, readJson, type SqlRow } from '../http';
+import {
+  asEnum,
+  asNumberValue,
+  badRequest,
+  forbidden,
+  json,
+  newId,
+  notFound,
+  readJson,
+  type SqlRow,
+} from '../http';
 import { viewFromRow } from '../mappers';
 import type { RequestContext, Route } from '../types';
 import { loadProperties, loadViews, touchDatabase } from './databases';
@@ -97,7 +107,8 @@ async function nextViewPosition(ctx: RequestContext, databaseId: string): Promis
 
 async function createViewHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
-  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  assertStructureEditable(access);
   const body = await readJson(ctx.request);
 
   const type = asEnum(body.type ?? 'table', VIEW_TYPES, '视图类型');
@@ -128,11 +139,12 @@ async function createViewHandler(ctx: RequestContext): Promise<Response> {
 
   const viewId = newId();
   const now = Date.now();
+  const locked = body.locked === true ? 1 : 0;
   await ctx.env.DB.prepare(
-    `INSERT INTO views (id, database_id, name, type, config, position, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO views (id, database_id, name, type, config, is_locked, position, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(viewId, ctx.params.id, name.slice(0, 80), type, JSON.stringify(config), position, now, now)
+    .bind(viewId, ctx.params.id, name.slice(0, 80), type, JSON.stringify(config), locked, position, now, now)
     .run();
   await touchDatabase(ctx.env, ctx.params.id);
 
@@ -142,11 +154,25 @@ async function createViewHandler(ctx: RequestContext): Promise<Response> {
 async function updateViewHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await accessForView(ctx.env, ctx.params.id, user, 'edit');
+  assertStructureEditable(access);
+  assertViewEditable(access, ctx.params.id);
   const body = await readJson(ctx.request);
 
   const row = await ctx.env.DB.prepare('SELECT * FROM views WHERE id = ?').bind(ctx.params.id).first<SqlRow>();
   if (!row) throw notFound('视图不存在');
   const current: ViewDef = viewFromRow(row);
+
+  // A locked view only accepts a plain unlock request.
+  if (current.locked) {
+    const onlyUnlock = body.locked === false && Object.keys(body).every((key) => key === 'locked');
+    if (!onlyUnlock) throw forbidden('视图已锁定，请先解锁');
+    if (access.role !== 'owner') throw forbidden('只有所有者可以解锁视图');
+    await ctx.env.DB.prepare('UPDATE views SET is_locked = 0, updated_at = ? WHERE id = ?')
+      .bind(Date.now(), ctx.params.id)
+      .run();
+    await touchDatabase(ctx.env, access.databaseId);
+    return json({ views: await loadViews(ctx.env, access.databaseId) });
+  }
 
   const type = body.type === undefined ? current.type : asEnum(body.type, VIEW_TYPES, '视图类型');
   const properties = await loadProperties(ctx.env, access.databaseId);
@@ -178,6 +204,10 @@ async function updateViewHandler(ctx: RequestContext): Promise<Response> {
     fields.push('position = ?');
     params.push(asNumberValue(body.position, 'position'));
   }
+  if (body.locked !== undefined) {
+    fields.push('is_locked = ?');
+    params.push(body.locked ? 1 : 0);
+  }
 
   if (fields.length) {
     fields.push('updated_at = ?');
@@ -192,6 +222,13 @@ async function updateViewHandler(ctx: RequestContext): Promise<Response> {
 async function deleteViewHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await accessForView(ctx.env, ctx.params.id, user, 'edit');
+  assertStructureEditable(access);
+  assertViewEditable(access, ctx.params.id);
+
+  const row = await ctx.env.DB.prepare('SELECT is_locked FROM views WHERE id = ?')
+    .bind(ctx.params.id)
+    .first<SqlRow>();
+  if (row && Number(row.is_locked ?? 0) === 1) throw forbidden('视图已锁定，请先解锁再删除');
 
   const views = await loadViews(ctx.env, access.databaseId);
   if (views.length <= 1) throw badRequest('至少需要保留一个视图');

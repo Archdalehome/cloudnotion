@@ -10,11 +10,16 @@ export interface DatabaseAccess {
   databaseId: string;
   ownerId: string;
   role: Role;
+  /** structure lock: fields / views are read-only while true */
+  locked: boolean;
+  /** non-null when the user only sees a set of shared views */
+  viewIds: string[] | null;
 }
 
 /**
  * Resolve the effective role of `userId` on `databaseId`.
  * Returns `null` when the user has no access at all (or database is gone).
+ * Members first, then view level shares (定向分享) as a fallback.
  */
 export async function resolveRole(
   env: Env,
@@ -22,18 +27,33 @@ export async function resolveRole(
   userId: string,
 ): Promise<Role | null> {
   const row = await env.DB.prepare(
-    `SELECT d.id, d.owner_id, m.role
+    `SELECT d.id, d.owner_id, m.role,
+            (SELECT vs.role FROM view_shares vs
+              WHERE vs.database_id = d.id AND vs.user_id = ? LIMIT 1) AS share_role
        FROM databases d
        LEFT JOIN database_members m ON m.database_id = d.id AND m.user_id = ?
       WHERE d.id = ? AND d.is_archived = 0`,
   )
-    .bind(userId, databaseId)
+    .bind(userId, userId, databaseId)
     .first<SqlRow>();
   if (!row) return null;
   if (sqlString(row, 'owner_id') === userId) return 'owner';
   const memberRole = sqlString(row, 'role');
   if (memberRole === 'editor' || memberRole === 'viewer') return memberRole;
+  const shareRole = sqlString(row, 'share_role');
+  if (shareRole === 'editor') return 'editor';
+  if (shareRole === 'viewer') return 'viewer';
   return null;
+}
+
+/** Ids of the views (定向分享) that were individually shared with `userId`. */
+export async function sharedViewIds(env: Env, databaseId: string, userId: string): Promise<string[]> {
+  const { results } = await env.DB.prepare(
+    'SELECT view_id FROM view_shares WHERE database_id = ? AND user_id = ?',
+  )
+    .bind(databaseId, userId)
+    .all<SqlRow>();
+  return (results ?? []).map((row) => sqlString(row, 'view_id')).filter(Boolean);
 }
 
 export async function requireDatabaseAccess(
@@ -42,16 +62,50 @@ export async function requireDatabaseAccess(
   user: AuthedUser,
   level: AccessLevel = 'view',
 ): Promise<DatabaseAccess> {
-  const row = await env.DB.prepare('SELECT owner_id, is_archived FROM databases WHERE id = ?')
+  const row = await env.DB.prepare('SELECT owner_id, is_archived, is_locked FROM databases WHERE id = ?')
     .bind(databaseId)
     .first<SqlRow>();
   if (!row || Number(row.is_archived ?? 0) === 1) throw notFound('表格不存在');
   const ownerId = sqlString(row, 'owner_id');
-  const role = ownerId === user.id ? 'owner' : await resolveRole(env, databaseId, user.id);
-  if (!role || LEVELS[role] < REQUIRED[level]) {
-    throw forbidden('没有权限访问该表格');
+  const locked = sqlNumber(row, 'is_locked') === 1;
+
+  if (ownerId === user.id) {
+    return { databaseId, ownerId, role: 'owner', locked, viewIds: null };
   }
-  return { databaseId, ownerId, role };
+
+  const member = await env.DB.prepare('SELECT role FROM database_members WHERE database_id = ? AND user_id = ?')
+    .bind(databaseId, user.id)
+    .first<SqlRow>();
+  const memberRole = member ? sqlString(member, 'role') : '';
+  if (memberRole === 'editor' || memberRole === 'viewer') {
+    return { databaseId, ownerId, role: memberRole, locked, viewIds: null };
+  }
+
+  // fall back to view level shares: the user may only see the shared views
+  const rows = await env.DB.prepare('SELECT view_id, role FROM view_shares WHERE database_id = ? AND user_id = ?')
+    .bind(databaseId, user.id)
+    .all<SqlRow>();
+  if (!rows.results?.length) throw forbidden('没有权限访问该表格');
+  const role: Role = rows.results.some((item) => sqlString(item, 'role') === 'editor') ? 'editor' : 'viewer';
+  if (LEVELS[role] < REQUIRED[level]) throw forbidden('没有权限访问该表格');
+  return {
+    databaseId,
+    ownerId,
+    role,
+    locked,
+    viewIds: rows.results.map((item) => sqlString(item, 'view_id')).filter(Boolean),
+  };
+}
+
+/** Structure (fields / views) may only change while the table is unlocked and fully shared. */
+export function assertStructureEditable(access: DatabaseAccess): void {
+  if (access.locked) throw forbidden('表格已锁定，字段与视图暂时无法修改');
+  if (access.viewIds) throw forbidden('当前为视图定向分享，无法修改表格结构');
+}
+
+/** Verify that a view is inside the set of views a view-scoped member may touch. */
+export function assertViewEditable(access: DatabaseAccess, viewId: string): void {
+  if (access.viewIds && !access.viewIds.includes(viewId)) throw forbidden('没有权限修改该视图');
 }
 
 /** Load the owning database of a property and verify access. */

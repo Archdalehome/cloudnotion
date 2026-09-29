@@ -109,7 +109,7 @@ export const api = {
     const suffix = query.toString() ? `?${query}` : '';
     return json<DatabaseDetail>(`/api/databases/${id}${suffix}`, 'GET');
   },
-  updateDatabase: (id: string, body: { name?: string; icon?: string; description?: string }) =>
+  updateDatabase: (id: string, body: { name?: string; icon?: string; description?: string; locked?: boolean }) =>
     json<DatabaseDetail>(`/api/databases/${id}`, 'PATCH', body),
   deleteDatabase: (id: string) => json<{ ok: true }>(`/api/databases/${id}`, 'DELETE'),
   rows: (id: string, params: { limit?: number; offset?: number }) => {
@@ -143,11 +143,18 @@ export const api = {
     json<{ record: RowRecord | null; total: number }>(`/api/records/${id}`, 'PATCH', body),
   deleteRecord: (id: string) => json<{ ok: true; total: number }>(`/api/records/${id}`, 'DELETE'),
 
-  createView: (databaseId: string, body: { name?: string; type: ViewType; config?: ViewConfig }) =>
-    json<{ views: ViewDef[]; viewId: string }>(`/api/databases/${databaseId}/views`, 'POST', body),
-  updateView: (id: string, body: { name?: string; type?: ViewType; config?: ViewConfig }) =>
+  createView: (
+    databaseId: string,
+    body: { name?: string; type: ViewType; config?: ViewConfig; copyOfViewId?: string; locked?: boolean },
+  ) => json<{ views: ViewDef[]; viewId: string }>(`/api/databases/${databaseId}/views`, 'POST', body),
+  updateView: (id: string, body: { name?: string; type?: ViewType; config?: ViewConfig; locked?: boolean; position?: number }) =>
     json<{ views: ViewDef[] }>(`/api/views/${id}`, 'PATCH', body),
   deleteView: (id: string) => json<{ views: ViewDef[] }>(`/api/views/${id}`, 'DELETE'),
+
+  createViewShare: (databaseId: string, body: { viewId: string; email: string; role: 'editor' | 'viewer' }) =>
+    json<{ viewShares: DatabaseDetail['viewShares'] }>(`/api/databases/${databaseId}/view-shares`, 'POST', body),
+  deleteViewShare: (id: string) =>
+    json<{ viewShares: DatabaseDetail['viewShares'] }>(`/api/view-shares/${id}`, 'DELETE'),
 
   addMember: (databaseId: string, body: { email: string; role: 'editor' | 'viewer' }) =>
     json<{ members: DatabaseDetail['members'] }>(`/api/databases/${databaseId}/members`, 'POST', body),

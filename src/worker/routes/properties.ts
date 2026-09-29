@@ -1,7 +1,7 @@
 /** /api/properties* - user defined fields (name, type, config, order, width). */
 import { FIELD_META, normalizeCellValue } from '../../shared/fields';
 import type { FieldType, PropertyConfig, RowValues, SelectOption } from '../../shared/types';
-import { accessForProperty, requireDatabaseAccess } from '../access';
+import { accessForProperty, assertStructureEditable, requireDatabaseAccess } from '../access';
 import { requireUser } from '../auth';
 import {
   asEnum,
@@ -140,7 +140,8 @@ async function nextPosition(ctx: RequestContext, databaseId: string): Promise<nu
 
 async function createPropertyHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
-  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  assertStructureEditable(access);
   const body = await readJson(ctx.request);
 
   const name = asString(body.name, '字段名称', { required: true, max: 120 });
@@ -178,6 +179,7 @@ async function createPropertyHandler(ctx: RequestContext): Promise<Response> {
 async function updatePropertyHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await accessForProperty(ctx.env, ctx.params.id, user, 'edit');
+  assertStructureEditable(access);
   const body = await readJson(ctx.request);
 
   const row = await ctx.env.DB.prepare('SELECT * FROM properties WHERE id = ?')
@@ -246,6 +248,7 @@ async function updatePropertyHandler(ctx: RequestContext): Promise<Response> {
 async function deletePropertyHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await accessForProperty(ctx.env, ctx.params.id, user, 'edit');
+  assertStructureEditable(access);
 
   const properties = await loadProperties(ctx.env, access.databaseId);
   if (properties.length <= 1) throw badRequest('至少需要保留一个字段');

@@ -167,6 +167,8 @@ export interface ViewDef {
   name: string;
   type: ViewType;
   config: ViewConfig;
+  /** locked views cannot be renamed / reconfigured / deleted */
+  locked: boolean;
   position: number;
   createdAt: number;
   updatedAt: number;
@@ -195,6 +197,19 @@ export interface Share {
   expiresAt: number | null;
 }
 
+/** A single view (its filters + visible fields) shared with one registered user. */
+export interface ViewShare {
+  id: string;
+  databaseId: string;
+  viewId: string;
+  viewName: string;
+  userId: string;
+  email: string;
+  name: string;
+  role: Role;
+  createdAt: number;
+}
+
 /* -------------------------------------------------------------- databases */
 
 export interface DatabaseSummary {
@@ -205,6 +220,10 @@ export interface DatabaseSummary {
   ownerId: string;
   ownerName?: string;
   role: Role;
+  /** true when an owner locked the table structure (fields / views read-only) */
+  locked: boolean;
+  /** names of the views that were shared with the current user (定向分享) */
+  sharedViewNames: string[];
   createdAt: number;
   updatedAt: number;
   rowCount?: number;
@@ -217,12 +236,17 @@ export interface DatabaseDetail {
   description: string;
   ownerId: string;
   role: Role;
+  /** structure lock: fields / views cannot be changed while true */
+  locked: boolean;
+  /** true when access comes from view shares only - rows/views are scoped */
+  viewScoped: boolean;
   createdAt: number;
   updatedAt: number;
   properties: Property[];
   views: ViewDef[];
   members: Member[];
   shares: Share[];
+  viewShares: ViewShare[];
   rows: RowRecord[];
   total: number;
   hasMore: boolean;

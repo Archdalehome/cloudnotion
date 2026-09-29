@@ -232,6 +232,74 @@ async function main() {
   const savedConditions = patchedView.data?.views?.find((view) => view.id === baseView.id)?.config?.filters?.conditions ?? [];
   check('save view filters', savedConditions.length === 1, JSON.stringify(savedConditions[0] ?? {}));
 
+  // a view created from the "＋ 新建视图" form carries name + multi conditions + lock
+  const lockedView = await call(`/api/databases/${databaseId}/views`, {
+    method: 'POST',
+    body: {
+      name: '锁定视图',
+      type: 'table',
+      config: {
+        filters: {
+          conjunction: 'or',
+          conditions: [
+            { propertyId: titleProperty.id, operator: 'contains', value: '第一' },
+            { propertyId: titleProperty.id, operator: 'is_not_empty' },
+          ],
+        },
+      },
+      locked: true,
+    },
+  });
+  const lockedViewId = lockedView.data?.viewId;
+  const lockedRow = (lockedView.data?.views ?? []).find((view) => view.id === lockedViewId);
+  check(
+    'create locked view with multi-condition filters',
+    lockedView.status === 201 &&
+      lockedRow?.name === '锁定视图' &&
+      lockedRow?.locked === true &&
+      lockedRow?.config?.filters?.conjunction === 'or' &&
+      (lockedRow?.config?.filters?.conditions ?? []).length === 2,
+    `status=${lockedView.status} locked=${lockedRow?.locked} conditions=${lockedRow?.config?.filters?.conditions?.length ?? 0}`,
+  );
+
+  const renameLocked = await call(`/api/views/${lockedViewId}`, { method: 'PATCH', body: { name: '不允许改名' } });
+  check(
+    'locked view rejects rename',
+    renameLocked.status === 403,
+    `status=${renameLocked.status} err=${renameLocked.data?.error?.message ?? ''}`,
+  );
+
+  const unlockView = await call(`/api/views/${lockedViewId}`, { method: 'PATCH', body: { locked: false } });
+  const unlockedRow = (unlockView.data?.views ?? []).find((view) => view.id === lockedViewId);
+  check('unlock view', unlockView.status === 200 && unlockedRow?.locked === false, `status=${unlockView.status}`);
+
+  const deleteLocked = await call(`/api/views/${lockedViewId}`, { method: 'DELETE' });
+  check(
+    'delete the previously locked view',
+    deleteLocked.status === 200 && (deleteLocked.data?.views ?? []).every((view) => view.id !== lockedViewId),
+    `status=${deleteLocked.status}`,
+  );
+
+  // -------------------------------------------------------- structure lock
+  section('table structure lock');
+  const lockTable = await call(`/api/databases/${databaseId}`, { method: 'PATCH', body: { locked: true } });
+  check('lock table structure', lockTable.status === 200 && lockTable.data?.locked === true, `status=${lockTable.status}`);
+
+  const blockedView = await call(`/api/databases/${databaseId}/views`, { method: 'POST', body: { type: 'table' } });
+  check('locked table rejects new view', blockedView.status === 403, `status=${blockedView.status}`);
+
+  const blockedProperty = await call(`/api/databases/${databaseId}/properties`, {
+    method: 'POST',
+    body: { name: '锁定期间字段', type: 'text' },
+  });
+  check('locked table rejects new field', blockedProperty.status === 403, `status=${blockedProperty.status}`);
+
+  const blockedPatch = await call(`/api/properties/${titleProperty.id}`, { method: 'PATCH', body: { name: '改名尝试' } });
+  check('locked table rejects field rename', blockedPatch.status === 403, `status=${blockedPatch.status}`);
+
+  const unlockTable = await call(`/api/databases/${databaseId}`, { method: 'PATCH', body: { locked: false } });
+  check('unlock table structure', unlockTable.status === 200 && unlockTable.data?.locked === false, `status=${unlockTable.status}`);
+
   const viewsBefore = (patchedView.data?.views ?? []).length;
   const removedView = await call(`/api/views/${boardViewId}`, { method: 'DELETE' });
   check(
@@ -346,6 +414,99 @@ async function main() {
 
   const revoked = await call(`/api/shares/${shareView.data.shares[0].id}`, { method: 'DELETE' });
   check('revoke share link', Array.isArray(revoked.data?.shares) && revoked.data.shares.length === 1);
+
+  // ------------------------------------------------------------- view shares
+  section('view shares');
+  const viewShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: baseView.id, email: memberEmail, role: 'viewer' },
+  });
+  const viewShareRow = (viewShare.data?.viewShares ?? []).find((item) => item.email === memberEmail);
+  check(
+    'share a single view with a member',
+    viewShare.status === 201 &&
+      viewShareRow?.viewId === baseView.id &&
+      viewShareRow?.viewName === baseView.name &&
+      viewShareRow?.role === 'viewer',
+    `status=${viewShare.status} viewShares=${viewShare.data?.viewShares?.length ?? 0} err=${viewShare.data?.error?.message ?? ''}`,
+  );
+
+  const unknownViewShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: baseView.id, email: `nobody+${Date.now()}@example.com`, role: 'viewer' },
+  });
+  check('view share needs a registered account', unknownViewShare.status === 404, `status=${unknownViewShare.status}`);
+
+  const missingViewShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: 'view-not-found', email: memberEmail, role: 'viewer' },
+  });
+  check('view share needs an existing view', missingViewShare.status === 404, `status=${missingViewShare.status}`);
+
+  const detailWithViewShare = await call(`/api/databases/${databaseId}`);
+  check(
+    'database detail exposes view shares',
+    (detailWithViewShare.data?.viewShares ?? []).some((item) => item.id === viewShareRow?.id),
+    `viewShares=${detailWithViewShare.data?.viewShares?.length ?? 0}`,
+  );
+
+  const removeViewShare = await call(`/api/view-shares/${viewShareRow?.id}`, { method: 'DELETE' });
+  check(
+    'revoke view share',
+    removeViewShare.status === 200 && (removeViewShare.data?.viewShares ?? []).every((item) => item.id !== viewShareRow?.id),
+    `status=${removeViewShare.status} err=${removeViewShare.data?.error?.message ?? ''}`,
+  );
+
+  // a view-scoped guest only sees the shared view and cannot touch the structure
+  const ownerCookie = cookie;
+  const reShareView = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: baseView.id, email: memberEmail, role: 'viewer' },
+  });
+  check('re-share the view with the member', reShareView.status === 201, `status=${reShareView.status}`);
+
+  const guestLogin = await call('/api/auth/login', {
+    method: 'POST',
+    body: { email: memberEmail, password: PASSWORD },
+  });
+  check('login as the shared member', guestLogin.status === 200, `status=${guestLogin.status}`);
+
+  const scoped = await call(`/api/databases/${databaseId}`);
+  check(
+    'view scoped guest sees only the shared view',
+    scoped.status === 200 &&
+      scoped.data?.viewScoped === true &&
+      (scoped.data?.views ?? []).length === 1 &&
+      scoped.data.views[0].id === baseView.id &&
+      Array.isArray(scoped.data?.rows),
+    `status=${scoped.status} views=${scoped.data?.views?.length ?? 0} rows=${scoped.data?.rows?.length ?? 0}`,
+  );
+
+  const scopedWrite = await call(`/api/databases/${databaseId}/records`, { method: 'POST', body: { values: {} } });
+  check('view scoped viewer cannot write', scopedWrite.status === 403, `status=${scopedWrite.status}`);
+
+  const scopedStructure = await call(`/api/databases/${databaseId}/properties`, {
+    method: 'POST',
+    body: { name: '越权字段', type: 'text' },
+  });
+  check('view scoped viewer cannot change the structure', scopedStructure.status === 403, `status=${scopedStructure.status}`);
+
+  // promote the same share to editor: the guest may then edit the shared view's rows
+  cookie = ownerCookie;
+  await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: baseView.id, email: memberEmail, role: 'editor' },
+  });
+  await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
+  const guestRecord = await call(`/api/databases/${databaseId}/records`, {
+    method: 'POST',
+    body: { values: { [titleProperty.id]: '视图分享写入' } },
+  });
+  check('editor view share may write', guestRecord.status === 201, `status=${guestRecord.status}`);
+  if (guestRecord.data?.record?.id) await call(`/api/records/${guestRecord.data.record.id}`, { method: 'DELETE' });
+  cookie = ownerCookie;
+  const cleanupViewShare = await call(`/api/view-shares/${(reShareView.data?.viewShares ?? [])[0]?.id}`, { method: 'DELETE' });
+  check('cleanup the view share', cleanupViewShare.status === 200, `status=${cleanupViewShare.status}`);
 
   // -------------------------------------------------------------------- files
   section('files');

@@ -6,12 +6,14 @@ interface PopoverProps {
   title?: string;
   wide?: boolean;
   disabled?: boolean;
+  /** trigger style (defaults to a ghost button) */
+  variant?: 'ghost' | 'primary';
   /** render prop receiving a close() helper */
   children: (close: () => void) => React.ReactNode;
 }
 
 /** Button + anchored panel that closes on outside click / Escape. */
-export function Popover({ label, title, wide, disabled, children }: PopoverProps) {
+export function Popover({ label, title, wide, disabled, variant = 'ghost', children }: PopoverProps) {
   const [open, setOpen] = useState(false);
   const host = useRef<HTMLDivElement>(null);
 
@@ -35,7 +37,7 @@ export function Popover({ label, title, wide, disabled, children }: PopoverProps
     <div className="popover-host" ref={host}>
       <button
         type="button"
-        className={`btn ghost small${open ? ' active' : ''}`}
+        className={`btn ${variant === 'primary' ? 'primary' : 'ghost'} small${open ? ' active' : ''}`}
         title={title}
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}

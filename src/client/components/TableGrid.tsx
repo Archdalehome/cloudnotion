@@ -156,38 +156,41 @@ export function TableGrid(props: TableGridProps) {
 
   return (
     <div className="grid-wrap">
-      <div className="grid-toolbar">
-        <button type="button" className="btn primary small" onClick={onCreateRow} disabled={!canEdit}>
-          ＋ 新建记录
-        </button>
-        {selectedRows.length ? (
-          <>
-            <span className="small muted">已选 {selectedRows.length} 条</span>
-            <button type="button" className="btn ghost small" onClick={() => onDuplicateRows(selectedRows)}>
-              复制
+      {selectedRows.length || hasMore ? (
+        <div className="grid-toolbar">
+          {selectedRows.length ? (
+            <>
+              <span className="small muted">已选 {selectedRows.length} 条</span>
+              <button
+                type="button"
+                className="btn ghost small"
+                onClick={() => onDuplicateRows(selectedRows)}
+              >
+                复制
+              </button>
+              <button
+                type="button"
+                className="btn ghost small"
+                onClick={() => {
+                  onDeleteRows(selectedRows);
+                  setSelected([]);
+                }}
+              >
+                删除
+              </button>
+              <button type="button" className="btn ghost small" onClick={() => setSelected([])}>
+                取消选择
+              </button>
+            </>
+          ) : null}
+          <span className="spacer" />
+          {hasMore ? (
+            <button type="button" className="btn small" onClick={onLoadMore}>
+              加载更多
             </button>
-            <button
-              type="button"
-              className="btn ghost small"
-              onClick={() => {
-                onDeleteRows(selectedRows);
-                setSelected([]);
-              }}
-            >
-              删除
-            </button>
-            <button type="button" className="btn ghost small" onClick={() => setSelected([])}>
-              取消选择
-            </button>
-          </>
-        ) : null}
-        <span className="spacer" />
-        {hasMore ? (
-          <button type="button" className="btn small" onClick={onLoadMore}>
-            加载更多
-          </button>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <table className="grid" style={{ minWidth: totalWidth }}>
         <colgroup>
