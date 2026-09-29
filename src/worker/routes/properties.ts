@@ -154,10 +154,11 @@ async function createPropertyHandler(ctx: RequestContext): Promise<Response> {
     body.position === undefined ? await nextPosition(ctx, ctx.params.id) : asNumberValue(body.position, 'position');
 
   const propertyId = newId();
+  const locked = body.locked === true ? 1 : 0;
   const now = Date.now();
   await ctx.env.DB.prepare(
-    `INSERT INTO properties (id, database_id, name, type, config, position, width, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO properties (id, database_id, name, type, config, is_locked, position, width, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       propertyId,
@@ -165,6 +166,7 @@ async function createPropertyHandler(ctx: RequestContext): Promise<Response> {
       name,
       type,
       JSON.stringify(config),
+      locked,
       position,
       Math.min(Math.max(Math.round(width), 80), 800),
       now,
@@ -218,6 +220,11 @@ async function updatePropertyHandler(ctx: RequestContext): Promise<Response> {
   if (body.position !== undefined) {
     fields.push('position = ?');
     values.push(asNumberValue(body.position, 'position'));
+  }
+  // 字段锁定（表头菜单里的「锁定字段」）
+  if (body.locked !== undefined) {
+    fields.push('is_locked = ?');
+    values.push(body.locked ? 1 : 0);
   }
   if (!fields.length) {
     return json({ property: current, properties: await loadProperties(ctx.env, access.databaseId) });

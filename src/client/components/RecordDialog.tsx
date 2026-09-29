@@ -35,11 +35,13 @@ export function RecordDialog({
     <Modal title={title} onClose={onClose} wide>
       <div className="center-list">
         {properties.map((property) => {
-          const editable = canEdit && !FIELD_META[property.type].computed;
+          // 字段级锁定：锁定字段只读，内容照常显示
+          const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
           const editing = editingId === property.id;
           return (
             <div className="row gap" key={property.id}>
               <span className="small muted" style={{ width: 120, flex: '0 0 120px' }}>
+                {property.locked ? '🔒 ' : ''}
                 {property.name}
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>

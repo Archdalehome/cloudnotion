@@ -21,14 +21,28 @@ import { countRecords, loadProperties, loadRecord, loadRecords, touchDatabase } 
 
 const MAX_BULK = 200;
 
-/** Merge incoming cell values into `base`, ignoring unknown / read-only properties. */
-export function normalizeValues(properties: Property[], incoming: unknown, base: RowValues = {}): RowValues {
+/**
+ * Merge incoming cell values into `base`, ignoring unknown / read-only / locked
+ * properties. `onLocked` (when provided) is called for every rejected locked
+ * property - update paths use it to report a 400, create paths stay silent so
+ * imports never fail on locked columns.
+ */
+export function normalizeValues(
+  properties: Property[],
+  incoming: unknown,
+  base: RowValues = {},
+  onLocked?: (property: Property) => void,
+): RowValues {
   const next: RowValues = { ...base };
   if (!incoming || typeof incoming !== 'object') return next;
   const byId = new Map(properties.map((property) => [property.id, property]));
   for (const [key, raw] of Object.entries(incoming as Record<string, unknown>)) {
     const property = byId.get(key);
     if (!property || FIELD_META[property.type].computed) continue;
+    if (property.locked) {
+      onLocked?.(property);
+      continue;
+    }
     const value = normalizeCellValue(property.type, raw, property.config);
     if (value === null) delete next[key];
     else next[key] = value;
@@ -167,7 +181,12 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
 
   const properties = await loadProperties(ctx.env, access.databaseId);
   const values =
-    body.values === undefined ? current.values : normalizeValues(properties, body.values, current.values);
+    body.values === undefined
+      ? current.values
+      : normalizeValues(properties, body.values, current.values, (property) => {
+          // 字段级锁定：该字段只读，编辑 / 上传都会被拒绝
+          throw badRequest(`字段「${property.name}」已锁定，无法修改`);
+        });
 
   const fields = ['"values" = ?', 'updated_by = ?', 'updated_at = ?'];
   const params: unknown[] = [JSON.stringify(values), user.id, Date.now()];

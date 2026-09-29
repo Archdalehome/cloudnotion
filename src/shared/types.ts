@@ -63,6 +63,8 @@ export interface Property {
   config: PropertyConfig;
   position: number;
   width: number;
+  /** 字段锁定：锁定后该字段的所有记录只读（不能编辑 / 上传），内容照常显示 */
+  locked: boolean;
   createdAt: number;
   updatedAt: number;
 }

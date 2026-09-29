@@ -310,6 +310,77 @@ async function main() {
     `viewId=${boardViewId} views=${viewsBefore}->${removedView.data?.views?.length ?? 0} status=${removedView.status} err=${removedView.data?.error?.message ?? ''}`,
   );
 
+  // ------------------------------------------------ 字段锁定 + 列移动
+  section('field lock + column order');
+  const lockedField = await call(`/api/properties/${titleProperty.id}`, {
+    method: 'PATCH',
+    body: { locked: true },
+  });
+  check(
+    'lock a field',
+    lockedField.status === 200 &&
+      lockedField.data?.property?.locked === true &&
+      (lockedField.data?.properties ?? []).some(
+        (property) => property.id === titleProperty.id && property.locked === true,
+      ),
+    `status=${lockedField.status}`,
+  );
+
+  const blockedCell = await call(`/api/records/${firstId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '锁定后不应写入' } },
+  });
+  check('locked field refuses a cell update', blockedCell.status === 400, `status=${blockedCell.status}`);
+
+  const afterBlocked = await call(`/api/databases/${databaseId}/rows?limit=50`);
+  check(
+    'locked field keeps its stored value',
+    (afterBlocked.data?.rows ?? []).find((row) => row.id === firstId)?.values?.[titleProperty.id] ===
+      '第一条记录（改）',
+  );
+
+  const otherCell = await call(`/api/records/${firstId}`, {
+    method: 'PATCH',
+    body: { values: { [numberProperty?.id]: 11 } },
+  });
+  check('unlocked fields stay editable', otherCell.status === 200, `status=${otherCell.status}`);
+
+  const lockedForm = new FormData();
+  lockedForm.set('file', new Blob(['locked'], { type: 'text/plain' }), 'locked.txt');
+  lockedForm.set('databaseId', databaseId);
+  lockedForm.set('recordId', firstId);
+  lockedForm.set('propertyId', titleProperty.id);
+  const blockedUpload = await call('/api/files', { method: 'POST', form: lockedForm });
+  check('locked field refuses uploads', blockedUpload.status === 403, `status=${blockedUpload.status}`);
+
+  // ← / →：交换相邻两列的 position 即可调整顺序
+  const [firstField, secondField] = renamed.data?.properties ?? [];
+  await call(`/api/properties/${firstField.id}`, { method: 'PATCH', body: { position: secondField.position } });
+  const swapped = await call(`/api/properties/${secondField.id}`, {
+    method: 'PATCH',
+    body: { position: firstField.position },
+  });
+  const swappedOrder = (swapped.data?.properties ?? []).map((property) => property.id);
+  check(
+    'move column left/right swaps the order',
+    swappedOrder[0] === secondField.id && swappedOrder[1] === firstField.id,
+    swappedOrder.slice(0, 2).join(' -> '),
+  );
+
+  const unlockedField = await call(`/api/properties/${titleProperty.id}`, {
+    method: 'PATCH',
+    body: { locked: false },
+  });
+  const restored = await call(`/api/records/${firstId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '第一条记录（改）' } },
+  });
+  check(
+    'unlock a field restores editing',
+    unlockedField.data?.property?.locked === false && restored.status === 200,
+    `status=${restored.status}`,
+  );
+
   // ------------------------------------------------------------ sharing
   section('sharing');
   const shareView = await call(`/api/databases/${databaseId}/shares`, {

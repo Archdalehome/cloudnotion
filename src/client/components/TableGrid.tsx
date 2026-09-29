@@ -11,6 +11,10 @@ interface TableGridProps {
   rows: RowRecord[];
   users: UserNames;
   canEdit: boolean;
+  /** 表格未锁定时才可改字段结构（新增 / 移动 / 隐藏 / 锁定 / 删除字段、列宽） */
+  canEditStructure: boolean;
+  /** 当前视图未锁定时才可改视图配置（排序 / 筛选 / 隐藏字段） */
+  canEditView: boolean;
   rowHeight: RowHeight;
   hasMore: boolean;
   onLoadMore: () => void;
@@ -23,6 +27,10 @@ interface TableGridProps {
   onEditProperty: (property: Property) => void;
   onDeleteProperty: (property: Property) => void;
   onHideProperty: (property: Property) => void;
+  /** ← / → 调整该列在表格中的左右位置 */
+  onMoveProperty: (property: Property, direction: 'left' | 'right') => void;
+  /** 锁定 / 解锁字段（锁定后该字段的所有记录只读） */
+  onTogglePropertyLock: (property: Property, locked: boolean) => void;
   onResizeProperty: (property: Property, width: number) => void;
   onSortProperty: (property: Property, direction: 'asc' | 'desc') => void;
   onFilterProperty: (property: Property) => void;
@@ -30,20 +38,29 @@ interface TableGridProps {
 
 function ColumnMenu({
   property,
-  canEdit,
+  canEditView,
+  canMoveLeft,
+  canMoveRight,
   onEditProperty,
   onDeleteProperty,
   onHideProperty,
+  onMoveProperty,
+  onTogglePropertyLock,
   onSortProperty,
   onFilterProperty,
   onAddProperty,
   close,
 }: {
   property: Property;
-  canEdit: boolean;
+  /** 当前视图可改（未锁定）时才能排序 / 筛选 / 隐藏字段 */
+  canEditView: boolean;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
   onEditProperty: (property: Property) => void;
   onDeleteProperty: (property: Property) => void;
   onHideProperty: (property: Property) => void;
+  onMoveProperty: (property: Property, direction: 'left' | 'right') => void;
+  onTogglePropertyLock: (property: Property, locked: boolean) => void;
   onSortProperty: (property: Property, direction: 'asc' | 'desc') => void;
   onFilterProperty: (property: Property) => void;
   onAddProperty: (afterId: string | null) => void;
@@ -55,14 +72,15 @@ function ColumnMenu({
   };
   return (
     <div>
-      <button type="button" className="menu-item" onClick={run(() => onEditProperty(property))} disabled={!canEdit}>
+      <button type="button" className="menu-item" onClick={run(() => onEditProperty(property))}>
         ✎ 编辑字段
       </button>
+      <div className="menu-label">排序与筛选</div>
       <button
         type="button"
         className="menu-item"
         onClick={run(() => onSortProperty(property, 'asc'))}
-        disabled={!canEdit}
+        disabled={!canEditView}
       >
         ↑ 升序
       </button>
@@ -70,25 +88,68 @@ function ColumnMenu({
         type="button"
         className="menu-item"
         onClick={run(() => onSortProperty(property, 'desc'))}
-        disabled={!canEdit}
+        disabled={!canEditView}
       >
         ↓ 降序
       </button>
-      <button type="button" className="menu-item" onClick={run(() => onFilterProperty(property))} disabled={!canEdit}>
+      <button
+        type="button"
+        className="menu-item"
+        onClick={run(() => onFilterProperty(property))}
+        disabled={!canEditView}
+      >
         ⚲ 添加筛选
       </button>
       <div className="menu-label">字段</div>
-      <button type="button" className="menu-item" onClick={run(() => onAddProperty(property.id))} disabled={!canEdit}>
+      <button type="button" className="menu-item" onClick={run(() => onAddProperty(property.id))}>
         ＋ 在右侧插入
       </button>
-      <button type="button" className="menu-item" onClick={run(() => onHideProperty(property))} disabled={!canEdit}>
+      <div className="menu-row">
+        <button
+          type="button"
+          className="menu-item center"
+          title="该列左移一位"
+          disabled={!canMoveLeft}
+          onClick={run(() => onMoveProperty(property, 'left'))}
+        >
+          ←
+        </button>
+        <button
+          type="button"
+          className="menu-item center"
+          title="该列右移一位"
+          disabled={!canMoveRight}
+          onClick={run(() => onMoveProperty(property, 'right'))}
+        >
+          →
+        </button>
+      </div>
+      <button
+        type="button"
+        className="menu-item"
+        onClick={run(() => onHideProperty(property))}
+        disabled={!canEditView}
+      >
         ⤫ 隐藏字段
       </button>
       <button
         type="button"
+        className="menu-item"
+        title={
+          property.locked
+            ? '解锁后该字段的记录才会恢复编辑 / 上传'
+            : '锁定后该字段所有记录只能查看，不能编辑或上传'
+        }
+        onClick={run(() => onTogglePropertyLock(property, !property.locked))}
+      >
+        {property.locked ? '🔓 解锁字段' : '🔒 锁定字段'}
+      </button>
+      <button
+        type="button"
         className="menu-item danger"
+        title={property.locked ? '字段已锁定，请先解锁再删除' : `删除字段「${property.name}」`}
         onClick={run(() => onDeleteProperty(property))}
-        disabled={!canEdit}
+        disabled={property.locked}
       >
         🗑 删除字段
       </button>
@@ -102,6 +163,8 @@ export function TableGrid(props: TableGridProps) {
     rows,
     users,
     canEdit,
+    canEditStructure,
+    canEditView,
     rowHeight,
     hasMore,
     onLoadMore,
@@ -123,7 +186,7 @@ export function TableGrid(props: TableGridProps) {
   const startResize = (event: React.MouseEvent, property: Property) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!canEdit) return;
+    if (!canEditStructure) return;
     const startX = event.clientX;
     const startWidth = widthOf(property);
     let current = startWidth;
@@ -152,7 +215,7 @@ export function TableGrid(props: TableGridProps) {
 
   const selectedRows = rows.filter((row) => selected.includes(row.id));
   const allSelected = rows.length > 0 && selectedRows.length === rows.length;
-  const totalWidth = properties.reduce((sum, property) => sum + widthOf(property), 44) + 130;
+  const totalWidth = properties.reduce((sum, property) => sum + widthOf(property), 44) + (canEditStructure ? 130 : 0);
 
   return (
     <div className="grid-wrap">
@@ -198,7 +261,7 @@ export function TableGrid(props: TableGridProps) {
           {properties.map((property) => (
             <col key={property.id} style={{ width: widthOf(property) }} />
           ))}
-          <col style={{ width: 130 }} />
+          {canEditStructure ? <col style={{ width: 130 }} /> : null}
         </colgroup>
         <thead>
           <tr>
@@ -210,38 +273,62 @@ export function TableGrid(props: TableGridProps) {
                 onChange={() => setSelected(allSelected ? [] : rows.map((row) => row.id))}
               />
             </th>
-            {properties.map((property) => (
+            {properties.map((property, index) => (
               <th key={property.id}>
                 <div className="head">
-                  <span
-                    className="name"
-                    title={`${property.name} · ${FIELD_META[property.type].label}`}
-                    onClick={() => props.onEditProperty(property)}
-                  >
-                    {property.name}
-                  </span>
-                  <Popover label="▾">
-                    {(close) => (
-                      <ColumnMenu
-                        property={property}
-                        canEdit={canEdit}
-                        onEditProperty={props.onEditProperty}
-                        onDeleteProperty={props.onDeleteProperty}
-                        onHideProperty={props.onHideProperty}
-                        onSortProperty={props.onSortProperty}
-                        onFilterProperty={props.onFilterProperty}
-                        onAddProperty={onAddProperty}
-                        close={close}
-                      />
-                    )}
-                  </Popover>
-                  <span className="resizer" onMouseDown={(event) => startResize(event, property)} />
+                  {canEditStructure ? (
+                    <span
+                      className="name"
+                      title={`${property.name} · ${FIELD_META[property.type].label}`}
+                      onClick={() => props.onEditProperty(property)}
+                    >
+                      {property.name}
+                    </span>
+                  ) : (
+                    <span
+                      className="name static"
+                      title={`${property.name} · ${FIELD_META[property.type].label}`}
+                    >
+                      {property.name}
+                    </span>
+                  )}
+                  {property.locked ? (
+                    <span className="lock-mark" title="该字段已锁定：所有记录只能查看，不能编辑或上传">
+                      🔒
+                    </span>
+                  ) : null}
+                  {canEditStructure ? (
+                    <Popover label="▾" title={`${property.name} 字段菜单`}>
+                      {(close) => (
+                        <ColumnMenu
+                          property={property}
+                          canEditView={canEditView}
+                          canMoveLeft={index > 0}
+                          canMoveRight={index < properties.length - 1}
+                          onEditProperty={props.onEditProperty}
+                          onDeleteProperty={props.onDeleteProperty}
+                          onHideProperty={props.onHideProperty}
+                          onMoveProperty={props.onMoveProperty}
+                          onTogglePropertyLock={props.onTogglePropertyLock}
+                          onSortProperty={props.onSortProperty}
+                          onFilterProperty={props.onFilterProperty}
+                          onAddProperty={onAddProperty}
+                          close={close}
+                        />
+                      )}
+                    </Popover>
+                  ) : null}
+                  {canEditStructure ? (
+                    <span className="resizer" onMouseDown={(event) => startResize(event, property)} />
+                  ) : null}
                 </div>
               </th>
             ))}
-            <th className="add-col" onClick={() => onAddProperty(null)} title="新建字段">
-              ＋ 字段
-            </th>
+            {canEditStructure ? (
+              <th className="add-col" onClick={() => onAddProperty(null)} title="新建字段">
+                ＋ 字段
+              </th>
+            ) : null}
           </tr>
         </thead>
 
@@ -253,7 +340,7 @@ export function TableGrid(props: TableGridProps) {
               </td>
               {properties.map((property) => {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
-                const editable = canEdit && !FIELD_META[property.type].computed;
+                const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
                 return (
                   <td key={property.id} className={`cell cell-view-cell row-height-${rowHeight}`}>
                     {isEditing ? (
@@ -307,7 +394,7 @@ export function TableGrid(props: TableGridProps) {
           {canEdit ? (
             <tr>
               <td className="row-head" />
-              <td className="cell" colSpan={properties.length + 1}>
+              <td className="cell" colSpan={properties.length + (canEditStructure ? 1 : 0)}>
                 <button type="button" className="btn ghost small" onClick={onCreateRow}>
                   ＋ 新建记录
                 </button>

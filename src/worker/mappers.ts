@@ -25,6 +25,7 @@ export function propertyFromRow(row: SqlRow): Property {
     config: parseJsonObject<PropertyConfig>(row.config, {}),
     position: sqlNumber(row, 'position'),
     width: sqlNumber(row, 'width', 200),
+    locked: sqlNumber(row, 'is_locked') === 1,
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
   };

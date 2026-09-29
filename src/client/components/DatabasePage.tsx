@@ -164,6 +164,10 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
 
   const commitCell = async (row: RowRecord, property: Property, value: CellValue | undefined) => {
     if (!canEdit) return;
+    if (property.locked) {
+      onToast(`字段「${property.name}」已锁定，无法修改`, 'error');
+      return;
+    }
     // optimistic update, then replace with the authoritative record
     setRows((prev) =>
       prev.map((item) => {
@@ -213,6 +217,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   };
 
   const uploadFile = async (row: RowRecord, property: Property, file: File): Promise<FileValue> => {
+    if (property.locked) throw new Error(`字段「${property.name}」已锁定，无法上传文件`);
     const result = await api.uploadFile(file, {
       databaseId: detail.id,
       recordId: row.id,
@@ -389,6 +394,41 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     }
   };
 
+  /** ← / →（表头字段菜单）：与相邻的可见列交换 position，实现左右移动 */
+  const moveProperty = async (property: Property, direction: 'left' | 'right') => {
+    if (!canEditStructure) return;
+    // 以「当前视图里能看到的列」为参照，隐藏列不参与移动
+    const list = shownProperties.some((item) => item.id === property.id) ? shownProperties : properties;
+    const index = list.findIndex((item) => item.id === property.id);
+    const neighbour = index < 0 ? undefined : list[index + (direction === 'left' ? -1 : 1)];
+    if (!neighbour) return;
+    // position 是浮点索引，交换两列的值即可；两列 position 相同时给一个偏移
+    const samePosition = property.position === neighbour.position;
+    const nextPosition = neighbour.position + (samePosition ? (direction === 'left' ? -1 : 1) : 0);
+    try {
+      await api.updateProperty(property.id, { position: nextPosition });
+      const result = await api.updateProperty(neighbour.id, { position: property.position });
+      setDetail((prev) => ({ ...prev, properties: result.properties }));
+    } catch (cause) {
+      fail(cause, '调整列顺序失败');
+      await reload();
+    }
+  };
+
+  /** 🔒 锁定字段 / 🔓 解锁字段：锁定后该字段的所有记录只读 */
+  const togglePropertyLock = async (property: Property, locked: boolean) => {
+    if (!canEditStructure) return;
+    try {
+      const result = await api.updateProperty(property.id, { locked });
+      setDetail((prev) => ({ ...prev, properties: result.properties }));
+      onToast(
+        locked ? `字段「${property.name}」已锁定，记录只能查看` : `字段「${property.name}」已解锁`,
+      );
+    } catch (cause) {
+      fail(cause, locked ? '锁定字段失败' : '解锁字段失败');
+    }
+  };
+
   /* -------------------------------------------------------------- database */
 
   const renameDatabase = async (nextName: string) => {
@@ -518,6 +558,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
               title={viewEditable ? '为该视图添加筛选条件（可多条件组合）' : '当前视图不可修改筛选条件'}
               variant="primary"
               wide
+              align="left"
               disabled={!viewEditable}
             >
               {() => (
@@ -574,6 +615,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
             rows={filtered}
             users={users}
             canEdit={canEdit}
+            canEditStructure={canEditStructure}
+            canEditView={viewEditable}
             rowHeight={activeView?.config.rowHeight ?? 'short'}
             hasMore={hasMore}
             onLoadMore={() => void loadMore()}
@@ -586,6 +629,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
             onEditProperty={(property) => setPropertyDialog({ mode: 'edit', property })}
             onDeleteProperty={(property) => void deleteProperty(property)}
             onHideProperty={hideProperty}
+            onMoveProperty={(property, direction) => void moveProperty(property, direction)}
+            onTogglePropertyLock={(property, locked) => void togglePropertyLock(property, locked)}
             onResizeProperty={(property, width) => void resizeProperty(property, width)}
             onSortProperty={addSortFor}
             onFilterProperty={addFilterFor}

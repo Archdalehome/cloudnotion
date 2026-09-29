@@ -121,11 +121,18 @@ export const api = {
 
   createProperty: (
     databaseId: string,
-    body: { name: string; type: FieldType; config?: PropertyConfig; width?: number; position?: number },
+    body: { name: string; type: FieldType; config?: PropertyConfig; width?: number; position?: number; locked?: boolean },
   ) => json<{ properties: Property[]; propertyId: string }>(`/api/databases/${databaseId}/properties`, 'POST', body),
   updateProperty: (
     id: string,
-    body: { name?: string; type?: FieldType; config?: PropertyConfig; width?: number; position?: number },
+    body: {
+      name?: string;
+      type?: FieldType;
+      config?: PropertyConfig;
+      width?: number;
+      position?: number;
+      locked?: boolean;
+    },
   ) => json<{ property: Property; properties: Property[]; migrated: number }>(`/api/properties/${id}`, 'PATCH', body),
   deleteProperty: (id: string) => json<{ properties: Property[] }>(`/api/properties/${id}`, 'DELETE'),
 

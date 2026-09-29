@@ -39,8 +39,11 @@ npx wrangler r2 bucket create cloudnotion-files
 npm run db:migrate:remote      # wrangler d1 migrations apply cloudnotion-db --remote
 ```
 
-本地开发用 `npm run db:migrate:local`。迁移文件是幂等的（`CREATE TABLE IF NOT EXISTS`），
-可安全重复执行；新增迁移时按 `migrations/0002_xxx.sql` 命名即可被自动识别。
+本地开发用 `npm run db:migrate:local`。`CREATE TABLE IF NOT EXISTS` 部分是幂等的，
+但 `ALTER TABLE ... ADD COLUMN`（如 `0002_view_shares.sql`、`0003_property_locks.sql`）
+不可重复执行，交给 `wrangler d1 migrations` 的版本表记录即可；新增迁移按
+`migrations/0003_xxx.sql` 命名就会被自动识别，`deploy.yml` 在部署前会自动执行
+`npm run db:migrate:remote`。
 
 ## 4. 构建并部署
 
@@ -83,8 +86,8 @@ npm run check:routes
 | 阶段 | Job | 内容 |
 | --- | --- | --- |
 | 1 | `verify` | `npm ci` → `npm run typecheck`（client + worker）→ `npm run check:routes` → `vite build` |
-| 2 | `e2e` | 本地 D1 迁移 → 后台启动 `wrangler dev --local` → 运行 `scripts/smoke-test.mjs`（45 项断言） |
-| 3 | `deploy` | 校验 D1 id → 确保 R2 桶 → `npm run db:migrate:remote` → `vite build` → `wrangler deploy` → 对线上地址跑一遍 45 项冒烟测试 |
+| 2 | `e2e` | 本地 D1 迁移 → 后台启动 `wrangler dev --local` → 运行 `scripts/smoke-test.mjs`（断言数见运行日志 / Step Summary） |
+| 3 | `deploy` | 校验 D1 id → 确保 R2 桶 → `npm run db:migrate:remote` → `vite build` → `wrangler deploy` → 对线上地址再跑一遍完整冒烟测试 |
 
 ### 6.1 一次性配置 Secrets
 

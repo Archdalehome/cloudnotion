@@ -102,7 +102,12 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
 
   const properties = await loadProperties(ctx.env, share.databaseId);
   const values =
-    body.values === undefined ? current.values : normalizeValues(properties, body.values, current.values);
+    body.values === undefined
+      ? current.values
+      : normalizeValues(properties, body.values, current.values, (property) => {
+          // 字段级锁定：该字段只读，编辑 / 上传都会被拒绝
+          throw badRequest(`字段「${property.name}」已锁定，无法修改`);
+        });
 
   const fields = ['"values" = ?', 'updated_at = ?'];
   const params: unknown[] = [JSON.stringify(values), Date.now()];

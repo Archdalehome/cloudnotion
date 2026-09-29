@@ -480,6 +480,17 @@ textarea.input {
   cursor: pointer;
 }
 
+/* 表格锁定后表头字段不可点击（不弹出修改窗口） */
+.grid thead th .head .name.static {
+  cursor: default;
+}
+
+.grid thead th .head .lock-mark {
+  flex: 0 0 auto;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
 .resizer {
   width: 5px;
   align-self: stretch;
@@ -661,8 +672,30 @@ textarea.input {
   background: var(--bg-sunken);
 }
 
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.menu-item:disabled:hover {
+  background: transparent;
+}
+
 .menu-item.danger {
   color: var(--danger);
+}
+
+.menu-item.center {
+  justify-content: center;
+  padding: 4px 0;
+  font-size: 14px;
+}
+
+/* ← / → 移动列按钮并排显示 */
+.menu-row {
+  display: flex;
+  gap: 4px;
+  padding: 0 4px;
 }
 
 .menu-label {
@@ -671,10 +704,10 @@ textarea.input {
   color: var(--text-faint);
 }
 
+/* 面板由 Popover 通过 portal 渲染到 body 上，位置全部走内联样式：
+   position: fixed 让它不会被视图栏 / 表头的 overflow 裁切 */
 .popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
   z-index: 30;
   width: 320px;
   max-height: 70vh;
@@ -692,6 +725,7 @@ textarea.input {
 
 .popover-host {
   position: relative;
+  display: inline-flex;
 }
 
 .filter-row {
@@ -936,12 +970,7 @@ textarea.input {
   padding: 8px 16px 0;
 }
 
-/* the filter panel is anchored to the left edge of its trigger */
-.view-toolbar .popover {
-  left: 0;
-  right: auto;
-  width: 420px;
-}
+/* 筛选面板通过 portal 渲染，用 align="left" 让它贴着触发按钮的左边缘 */
 
 .icon-input {
   width: 42px;

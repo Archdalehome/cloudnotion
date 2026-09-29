@@ -73,6 +73,16 @@ async function uploadHandler(ctx: RequestContext): Promise<Response> {
   const recordId = typeof form.get('recordId') === 'string' ? String(form.get('recordId')) : null;
   const propertyId = typeof form.get('propertyId') === 'string' ? String(form.get('propertyId')) : null;
 
+  // 字段级锁定：锁定字段不接受新的上传
+  if (databaseId && propertyId) {
+    const property = await ctx.env.DB.prepare('SELECT name, is_locked FROM properties WHERE id = ? AND database_id = ?')
+      .bind(propertyId, databaseId)
+      .first<SqlRow>();
+    if (property && sqlNumber(property, 'is_locked') === 1) {
+      throw forbidden(`字段「${sqlString(property, 'name')}」已锁定，无法上传文件`);
+    }
+  }
+
   const fileId = newId();
   const name = safeFileName(asString(file.name, '文件名', { max: 200 }) || 'file');
   const mime = file.type || 'application/octet-stream';
@@ -163,6 +173,16 @@ async function deleteHandler(ctx: RequestContext): Promise<Response> {
   const databaseId = sqlString(row, 'database_id');
   if (databaseId) {
     await requireDatabaseAccess(ctx.env, databaseId, user, 'edit');
+    // 字段级锁定：锁定字段不接受附件删除（记录里仍然引用该文件）
+    const propertyId = sqlString(row, 'property_id');
+    if (propertyId) {
+      const property = await ctx.env.DB.prepare('SELECT name, is_locked FROM properties WHERE id = ? AND database_id = ?')
+        .bind(propertyId, databaseId)
+        .first<SqlRow>();
+      if (property && sqlNumber(property, 'is_locked') === 1) {
+        throw forbidden(`字段「${sqlString(property, 'name')}」已锁定，无法删除附件`);
+      }
+    }
   } else if (sqlString(row, 'uploaded_by') !== user.id) {
     throw forbidden('没有权限删除该文件');
   }

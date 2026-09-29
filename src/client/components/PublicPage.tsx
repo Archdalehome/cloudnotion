@@ -178,7 +178,7 @@ export function PublicPage({ token }: PublicPageProps) {
               <tr key={row.id}>
                 {columns.map((property) => {
                   const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
-                  const editable = canEdit && !FIELD_META[property.type].computed;
+                  const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
                   return (
                     <td key={property.id} className="cell cell-view-cell row-height-short">
                       {isEditing ? (

@@ -14,10 +14,11 @@
 | --- | --- |
 | 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希） |
 | 表格 | 多表格（Database）管理、图标/描述、模板创建、软删除归档 |
-| 字段 | 16 种字段类型（文本/数字/单选/多选/状态/日期/勾选/链接/邮箱/电话/附件/创建时间/更新时间/创建人/更新人），可重命名、改宽、拖动排序、类型转换时清洗数据 |
+| 字段 | 16 种字段类型（文本/数字/单选/多选/状态/日期/勾选/链接/邮箱/电话/附件/创建时间/更新时间/创建人/更新人），可重命名、改宽、拖动排序、类型转换时清洗数据；表头 `▾` 菜单支持「编辑 / 升序 / 降序 / 添加筛选 / 在右侧插入 / ← → 左右移动该列 / 隐藏字段 / 锁定字段 / 删除字段」 |
 | 记录 | 新建/编辑/删除、批量创建、批量删除、复制记录、分页（`limit`/`offset`）、乐观更新 + 失败回滚 |
 | 视图 | 表格 / 看板 / 画廊三种视图，支持筛选（and/or、多条件）、排序（多键）、分组、隐藏字段、行高/卡片大小，全部配置存 D1 |
 | 协作 | 邀请已注册用户为 `editor`/`viewer`，改角色、移除；所有者始终排在成员列表首位且不可被移除 |
+| 锁定 | 三层只读控制：**表格锁定**（隐藏表头 `▾` 菜单与 `＋字段` 列、表头不可点开修改窗口，字段与视图结构只读）、**视图锁定**（名称 / 筛选 / 可见字段不可改，不可删除）、**字段锁定**（表头 `▾` 菜单里锁定，该字段所有记录只能查看，编辑与附件上传都会被服务端拒绝） |
 | 分享 | 生成只读 / 可编辑公开链接（可设 7/30/90 天过期），`/share/:token` 免登录访问，写操作走 `/api/public/*` |
 | 附件 | 上传到 R2（默认上限 25MB，`MAX_UPLOAD_MB` 可调），元数据存 `files` 表 |
 
@@ -75,7 +76,7 @@ BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 
 - `users` / `sessions`：账号与会话（`sessions.token_hash` 唯一）
 - `databases`：一张表格；`database_members`：受邀协作者（`role` = editor/viewer）
-- `properties`：字段定义（`type` + `config` JSON + `position` REAL 排序）
+- `properties`：字段定义（`type` + `config` JSON + `position` REAL 排序 + `is_locked` 字段级锁定）
 - `records`：一行记录，`"values"` 字段存 `{ 字段id: 值 }` JSON 文本，`position` REAL 排序
   > 注意：`values` 是 SQLite 保留字，SQL 里必须写成 `"values"`（迁移与 `routes/*.ts` 均已加引号）
 - `views`：视图（`type` + `config` JSON：filters/sorts/groupBy/visibleProperties/rowHeight/cardSize…）
