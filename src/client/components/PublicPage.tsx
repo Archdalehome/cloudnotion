@@ -7,7 +7,7 @@ import { FIELD_META } from '../../shared/fields';
 import type { CellValue, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
 import { applyView, visibleProperties } from '../lib/viewEngine';
-import { CellEditor, CellView } from './Cell';
+import { CellEditor, CellView, type UserNames } from './Cell';
 
 interface PublicPageProps {
   token: string;
@@ -48,6 +48,13 @@ export function PublicPage({ token }: PublicPageProps) {
   const columns = activeView ? visibleProperties(properties, activeView.config) : properties;
   /** 公开链接里没有登录用户，「当前用户」= 表格所有者 */
   const filterContext = useMemo(() => ({ viewerId: payload?.database.ownerId ?? null }), [payload]);
+  /** 行元数据里的用户 id → 显示名（公开链接里也能看到「创建人」） */
+  const users = useMemo<UserNames>(() => {
+    const map: UserNames = { ...(payload?.people ?? {}) };
+    const owner = payload?.database;
+    if (owner && !map[owner.ownerId]) map[owner.ownerId] = owner.ownerName || '表格所有者';
+    return map;
+  }, [payload]);
   const filtered = useMemo(
     () => (activeView ? applyView(properties, rows, activeView.config, filterContext) : rows),
     [properties, rows, activeView, filterContext],
@@ -197,7 +204,7 @@ export function PublicPage({ token }: PublicPageProps) {
                         <CellView
                           property={property}
                           row={row}
-                          users={{}}
+                          users={users}
                           editable={editable}
                           onEdit={() => setEditing({ rowId: row.id, propertyId: property.id })}
                           onQuickChange={(value) => void commitCell(row, property, value)}

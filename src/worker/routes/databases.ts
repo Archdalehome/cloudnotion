@@ -190,6 +190,39 @@ export async function loadRecord(env: Env, recordId: string): Promise<RowRecord 
   return row ? recordFromRow(row) : null;
 }
 
+/**
+ * 行元数据（created_by / updated_by）里出现过的用户 id → 显示名。
+ *
+ * 「创建人 / 最后编辑人」字段的取值来自行元数据而不是 values，且被定向分享（视图分享）
+ * 的访问者并不是 database_members 成员，因此不能只靠 members 解析姓名。
+ * 只解析当前这一页记录里真实出现过的 id，不会泄露看不到的记录。
+ */
+export async function loadPeopleNames(env: Env, rows: RowRecord[]): Promise<Record<string, string>> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.createdBy) ids.add(row.createdBy);
+    if (row.updatedBy) ids.add(row.updatedBy);
+  }
+  if (!ids.size) return {};
+
+  const all = [...ids];
+  // 分片绑定参数，永远不超过 D1 / SQLite 的变量上限
+  const CHUNK = 100;
+  const names: Record<string, string> = {};
+  for (let index = 0; index < all.length; index += CHUNK) {
+    const slice = all.slice(index, index + CHUNK);
+    const { results } = await env.DB.prepare(
+      `SELECT id, name, email FROM users WHERE id IN (${slice.map(() => '?').join(', ')})`,
+    )
+      .bind(...slice)
+      .all<SqlRow>();
+    for (const row of results ?? []) {
+      names[sqlString(row, 'id')] = sqlString(row, 'name') || sqlString(row, 'email');
+    }
+  }
+  return names;
+}
+
 export interface CreateDatabaseOptions {
   name: string;
   icon: string;
@@ -432,6 +465,8 @@ export async function buildDatabaseDetail(
 
   const views = scoped ? allViews.filter((view) => access.viewIds?.includes(view.id)) : allViews;
   const properties = scoped ? scopedProperties(allProperties, views) : allProperties;
+  // 「创建人 / 最后编辑人」取自行元数据，可能指向并非成员的定向分享用户
+  const people = await loadPeopleNames(env, page.rows);
 
   return {
     id: databaseId,
@@ -452,6 +487,7 @@ export async function buildDatabaseDetail(
     rows: page.rows,
     total: page.total,
     hasMore: offset + page.rows.length < page.total,
+    people,
   };
 }
 

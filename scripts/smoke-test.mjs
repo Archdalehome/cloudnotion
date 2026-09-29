@@ -684,6 +684,12 @@ async function main() {
     `rows=${othersRows.length} ownerRows=${othersRows.filter((row) => row.createdBy === ownerId).length}`,
   );
 
+  check(
+    'shared user resolves names for rows created by others',
+    guestOthers.data?.people?.[ownerId] === 'Smoke Tester',
+    `name=${guestOthers.data?.people?.[ownerId] ?? ''}`,
+  );
+
   cookie = ownerCookie;
   const peopleShares = othersShare.data?.viewShares ?? [];
   let revokedPeopleShares = 0;
@@ -695,6 +701,43 @@ async function main() {
     'revoke the people filter view shares',
     peopleShares.length > 0 && revokedPeopleShares === peopleShares.length,
     `${revokedPeopleShares}/${peopleShares.length} view share(s)`,
+  );
+
+  // ----------------------------------- 创建人姓名解析（被分享但非成员的访问者）
+  section('creator names (创建人)');
+  const ownerDetail = await call(`/api/databases/${databaseId}`);
+  const sharedRow = (ownerDetail.data?.rows ?? []).find((row) => row.id === mineId);
+  check(
+    'the shared user is not a table member',
+    (ownerDetail.data?.members ?? []).every((item) => item.userId !== memberId),
+    `members=${ownerDetail.data?.members?.length ?? 0}`,
+  );
+  check(
+    'owner resolves the name of a row a shared user created',
+    sharedRow?.createdBy === memberId && ownerDetail.data?.people?.[memberId] === 'Smoke Collaborator',
+    `createdBy=${sharedRow?.createdBy ?? ''} name=${ownerDetail.data?.people?.[memberId] ?? ''}`,
+  );
+  check(
+    'owner rows resolve the owner name',
+    ownerDetail.data?.people?.[ownerId] === 'Smoke Tester',
+    `name=${ownerDetail.data?.people?.[ownerId] ?? ''}`,
+  );
+
+  const sharesBefore = new Set(
+    ((await call(`/api/databases/${databaseId}/shares`)).data?.shares ?? []).map((item) => item.id),
+  );
+  const namesShare = await call(`/api/databases/${databaseId}/shares`, {
+    method: 'POST',
+    body: { permission: 'view' },
+  });
+  const namesToken = (namesShare.data?.shares ?? []).find((item) => !sharesBefore.has(item.id))?.token;
+  const publicNames = await call(`/api/public/${namesToken}`, { cookie: false });
+  check(
+    'public payload resolves creator names',
+    Boolean(namesToken) &&
+      publicNames.data?.people?.[memberId] === 'Smoke Collaborator' &&
+      publicNames.data?.people?.[ownerId] === 'Smoke Tester',
+    `owner=${publicNames.data?.people?.[ownerId] ?? ''} guest=${publicNames.data?.people?.[memberId] ?? ''}`,
   );
 
   // -------------------------------------------------------------------- files

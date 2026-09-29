@@ -15,7 +15,7 @@ import {
 } from '../http';
 import { recordFromRow } from '../mappers';
 import type { Env, RequestContext, Route } from '../types';
-import { countRecords, loadProperties, loadRecords, loadViews, touchDatabase } from './databases';
+import { countRecords, loadPeopleNames, loadProperties, loadRecords, loadViews, touchDatabase } from './databases';
 import { normalizeValues } from './records';
 
 const DEFAULT_PAGE_SIZE = 500;
@@ -47,6 +47,8 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     loadRecords(ctx.env, share.databaseId, limit, offset),
     countRecords(ctx.env, share.databaseId),
   ]);
+  // 公开链接也要能显示「创建人 / 最后编辑人」的姓名（表格所有者 + 协作者）
+  const people = await loadPeopleNames(ctx.env, rows);
 
   const payload: PublicDatabaseResponse = {
     database: {
@@ -63,6 +65,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     rows,
     total,
     hasMore: offset + rows.length < total,
+    people,
   };
   return json(payload);
 }

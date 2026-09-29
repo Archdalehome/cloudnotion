@@ -252,6 +252,11 @@ export interface DatabaseDetail {
   rows: RowRecord[];
   total: number;
   hasMore: boolean;
+  /**
+   * 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名。
+   * 定向分享的访问者不是表格成员，只有这份映射才能显示「创建人」的姓名。
+   */
+  people: Record<string, string>;
 }
 
 /* ----------------------------------------------------------------- users */
@@ -297,4 +302,6 @@ export interface PublicDatabaseResponse {
   rows: RowRecord[];
   total: number;
   hasMore: boolean;
+  /** 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名 */
+  people: Record<string, string>;
 }

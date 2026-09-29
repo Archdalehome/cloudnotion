@@ -84,11 +84,12 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const canEditStructure = canEdit && !structureLocked && !viewScoped;
 
   const users = useMemo<UserNames>(() => {
-    const map: UserNames = {};
+    // 行元数据（创建人 / 最后编辑人）里的用户可能只是被定向分享的访客，不在成员列表中
+    const map: UserNames = { ...detail.people };
     for (const member of members) map[member.userId] = member.name || member.email;
     if (me) map[me.id] = me.name || me.email;
     return map;
-  }, [members, me]);
+  }, [detail.people, members, me]);
 
   const activeView: ViewDef | null = views.find((view) => view.id === activeViewId) ?? views[0] ?? null;
   /** 当前视图可改名 / 改配置 / 删除 */
