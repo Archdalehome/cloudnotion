@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { TEMPLATES } from '../../shared/templates';
 import type { DatabaseSummary, SessionUser } from '../../shared/types';
 import { ApiError } from '../api';
+import { UserChip } from './UserChip';
 
 interface SidebarProps {
   appName: string;
@@ -186,18 +187,7 @@ export function Sidebar({
 
       <div className="sidebar-foot">
         <div className="row gap">
-          <div style={{ minWidth: 0 }}>
-            <div className="small" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {user?.name || '未登录'}
-            </div>
-            <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {user?.email || ''}
-            </div>
-          </div>
-          <span className="spacer" />
-          <button type="button" className="btn ghost small" onClick={onLogout}>
-            退出
-          </button>
+          <UserChip user={user} onLogout={onLogout} />
         </div>
       </div>
     </aside>

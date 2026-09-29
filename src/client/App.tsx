@@ -9,6 +9,7 @@ import { AuthPage } from './components/AuthPage';
 import { DatabasePage } from './components/DatabasePage';
 import { PublicPage } from './components/PublicPage';
 import { Sidebar } from './components/Sidebar';
+import { UserChip } from './components/UserChip';
 
 interface ToastItem {
   id: number;
@@ -288,6 +289,13 @@ export function App() {
             </button>
             <span className="brand">{appName}</span>
             {narrow && detail ? <span className="muted small db-hint">{detail.name}</span> : null}
+            <span className="spacer" />
+            {/* 侧边栏收起时侧边栏底部看不见了，把「用户名 · 邮箱 · 退出」挪到右上角 */}
+            {!sidebarOpen ? (
+              <div className="row gap app-bar-user">
+                <UserChip user={user} onLogout={() => void logout()} />
+              </div>
+            ) : null}
           </div>
         ) : null}
 
