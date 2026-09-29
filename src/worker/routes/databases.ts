@@ -64,6 +64,7 @@ export async function listDatabases(env: Env, userId: string): Promise<DatabaseS
       `SELECT d.id, d.name, d.icon, d.description, d.owner_id, d.is_locked, d.created_at, d.updated_at,
               u.name AS owner_name,
               (SELECT COUNT(*) FROM records r WHERE r.database_id = d.id AND r.is_archived = 0) AS record_count,
+              CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS is_member,
               CASE WHEN d.owner_id = ? THEN 'owner'
                    ELSE COALESCE(m.role, s.role, 'viewer') END AS role
          FROM databases d
@@ -94,13 +95,18 @@ export async function listDatabases(env: Env, userId: string): Promise<DatabaseS
     sharedViewNames.set(databaseId, list);
   }
 
-  return (results ?? []).map((row) =>
-    databaseSummaryFromRow(
+  return (results ?? []).map((row) => {
+    const role = sqlString(row, 'role', 'viewer') as Role;
+    // 结果集只包含「所有者 / 表格成员 / 视图定向分享」三种来源：
+    // 既不是所有者也不是成员（且能查出来）就说明访问权只来自定向分享的视图。
+    const viewScoped = role !== 'owner' && sqlNumber(row, 'is_member') !== 1;
+    return databaseSummaryFromRow(
       row,
-      sqlString(row, 'role', 'viewer') as Role,
+      role,
       sharedViewNames.get(sqlString(row, 'id')) ?? [],
-    ),
-  );
+      viewScoped,
+    );
+  });
 }
 
 /** Union of the fields that the given (shared) views expose. */

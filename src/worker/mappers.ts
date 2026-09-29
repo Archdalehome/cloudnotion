@@ -82,7 +82,13 @@ export function shareFromRow(row: SqlRow): Share {
   };
 }
 
-export function databaseSummaryFromRow(row: SqlRow, role: Role, sharedViewNames: string[] = []): DatabaseSummary {
+export function databaseSummaryFromRow(
+  row: SqlRow,
+  role: Role,
+  sharedViewNames: string[] = [],
+  /** 只通过视图定向分享获得访问权（不是所有者、也不是表格成员） */
+  viewScoped = false,
+): DatabaseSummary {
   return {
     id: sqlString(row, 'id'),
     name: sqlString(row, 'name'),
@@ -92,6 +98,7 @@ export function databaseSummaryFromRow(row: SqlRow, role: Role, sharedViewNames:
     ownerName: sqlNullableString(row, 'owner_name') ?? undefined,
     role,
     locked: sqlNumber(row, 'is_locked') === 1,
+    viewScoped,
     sharedViewNames,
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),

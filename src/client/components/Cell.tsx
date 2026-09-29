@@ -121,7 +121,15 @@ export function CellView({ property, row, users, editable, onEdit, onQuickChange
   }
 
   return (
-    <button type="button" className={`cell-view${empty ? ' empty' : ''}`} onClick={start} disabled={!editable}>
+    <button
+      type="button"
+      className={`cell-view${empty ? ' empty' : ''}`}
+      onClick={start}
+      disabled={!editable}
+      // 点击它就会开始编辑这个单元格：调用方的「点别处退出输入」据此放行，
+      // 否则新单元格的编辑框刚打开就会被关掉（勾选类字段是就地切换，不算）
+      data-start-edit={editable && !(property.type === 'checkbox' && onQuickChange) ? 'true' : undefined}
+    >
       {content}
     </button>
   );
@@ -134,8 +142,43 @@ export interface CellEditorProps {
   value: CellValue | undefined;
   /** uploads an attachment and resolves with its stored metadata */
   uploadFile?: (file: File) => Promise<FileValue>;
+  /** 保存并结束该单元格的编辑（Enter / 键盘操作时用） */
   onCommit: (value: CellValue | undefined) => void;
+  /**
+   * 只保存、不结束编辑：日期与文件字段「选完即自动确认」，编辑器保留在单元格里，
+   * 等用户点击其它位置再退出。未提供时退化为「保存并退出」。
+   */
+  onAutoSave?: (value: CellValue | undefined) => void;
   onCancel: () => void;
+}
+
+/**
+ * 「点击单元格以外的任意位置就退出该单元格的输入」。
+ *
+ * 监听 document 冒泡阶段的 click（此时 React 根节点上的 onClick 已经跑完），
+ * 两种点击不关闭：
+ * 1. 落在正在编辑的单元格内部（编辑器里的按钮 / 下拉 / 日期输入框）；
+ * 2. 点的是另一个「可编辑单元格」——它的 onClick 已经开始编辑那个格子，
+ *    这里再关就会把刚打开的编辑框顺手关掉。
+ *    注意：React 重渲染会换掉被点中的按钮节点，此时它已经脱离文档，
+ *    所以只能读节点自身的属性，不能靠 closest 往上找。
+ * 文字类编辑器靠 blur 先提交，所以提前卸载输入框不会丢数据。
+ */
+export function useCloseOnOutsideClick(active: boolean, onClose: () => void) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!active) return;
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest?.('[data-editing-cell="true"]')) return;
+      if (target.matches?.('[data-start-edit="true"]')) return;
+      close.current();
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, [active]);
 }
 
 /** Wrap a handler so it only ever fires once (blur + Enter both commit). */
@@ -255,7 +298,18 @@ function MultiSelectEditor({ property, value, onCommit, onCancel }: CellEditorPr
   );
 }
 
-function DateEditor({ property, value, onCommit, onCancel }: CellEditorProps) {
+/** 把「日期 + 可选时间」组合成单元格值；日期被清空时返回 undefined（等于清空该单元格）。 */
+function dateValueOf(day: string, clock: string, includeTime: boolean): DateValue | undefined {
+  if (!day) return undefined;
+  if (includeTime && clock) return { start: `${day}T${clock}:00.000Z`, end: null, includeTime: true };
+  return { start: day, end: null, includeTime: false };
+}
+
+/**
+ * 日期编辑器：选好日期 / 时间就已经自动保存，没有「确定 / 取消」按钮；
+ * 点击单元格以外的任意位置即退出（由调用方的 useCloseOnOutsideClick 处理）。
+ */
+function DateEditor({ property, value, onCommit, onAutoSave, onCancel }: CellEditorProps) {
   const current = (value as DateValue | undefined) ?? null;
   const date = current?.start ? current.start.slice(0, 10) : '';
   const time = current?.start && current.start.includes('T') ? current.start.slice(11, 16) : '';
@@ -263,16 +317,27 @@ function DateEditor({ property, value, onCommit, onCancel }: CellEditorProps) {
   const [day, setDay] = useState(date);
   const [clock, setClock] = useState(time);
   const ref = useRef<HTMLInputElement>(null);
+  /** 改动过就已经自动保存了，Enter 只负责退出，不必再发一次请求 */
+  const dirty = useRef(false);
   useEffect(() => ref.current?.focus(), []);
 
-  const commit = useOnce(() => {
-    if (!day) {
-      onCommit(undefined);
+  const save = (nextDay: string, nextClock: string) => {
+    dirty.current = true;
+    (onAutoSave ?? onCommit)(dateValueOf(nextDay, nextClock, includeTime));
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (dirty.current) onCommit(dateValueOf(day, clock, includeTime));
+      else onCancel();
       return;
     }
-    const start = includeTime && clock ? `${day}T${clock}:00.000Z` : day;
-    onCommit({ start, end: null, includeTime: includeTime && Boolean(clock) });
-  });
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onCancel();
+    }
+  };
 
   return (
     <span className="cell-date">
@@ -281,39 +346,36 @@ function DateEditor({ property, value, onCommit, onCancel }: CellEditorProps) {
         className="cell-input"
         type="date"
         value={day}
-        onChange={(event) => setDay(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') onCancel();
+        onChange={(event) => {
+          setDay(event.target.value);
+          save(event.target.value, clock);
         }}
+        onKeyDown={onKeyDown}
       />
       {includeTime ? (
         <input
           className="cell-input"
           type="time"
           value={clock}
-          onChange={(event) => setClock(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') commit();
-            if (event.key === 'Escape') onCancel();
+          onChange={(event) => {
+            setClock(event.target.value);
+            save(day, event.target.value);
           }}
+          onKeyDown={onKeyDown}
         />
       ) : null}
-      <button type="button" className="btn small" onClick={commit}>
-        确定
-      </button>
-      <button type="button" className="btn small ghost" onClick={onCancel}>
-        取消
-      </button>
     </span>
   );
 }
 
-function FilesEditor({ value, uploadFile, onCommit, onCancel }: CellEditorProps) {
+function FilesEditor({ value, uploadFile, onCommit, onAutoSave, onCancel }: CellEditorProps) {
   const files = (value as FileValue[] | undefined) ?? [];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /** 上传成功 / 移除文件都自动保存，不需要「完成」按钮 */
+  const save = (next: FileValue[] | undefined) => (onAutoSave ?? onCommit)(next);
 
   const pick = async (list: FileList | null) => {
     if (!list?.length || !uploadFile) return;
@@ -322,7 +384,7 @@ function FilesEditor({ value, uploadFile, onCommit, onCancel }: CellEditorProps)
     try {
       const uploaded: FileValue[] = [];
       for (const file of Array.from(list)) uploaded.push(await uploadFile(file));
-      onCommit([...files, ...uploaded]);
+      save([...files, ...uploaded]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '上传失败');
     } finally {
@@ -331,7 +393,13 @@ function FilesEditor({ value, uploadFile, onCommit, onCancel }: CellEditorProps)
   };
 
   return (
-    <div className="cell-dropdown">
+    <div
+      className="cell-dropdown"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onCancel();
+      }}
+    >
       {files.map((file) => (
         <span key={file.id} className="file-chip">
           <a href={api.fileUrl(file.id)} target="_blank" rel="noreferrer">
@@ -341,7 +409,7 @@ function FilesEditor({ value, uploadFile, onCommit, onCancel }: CellEditorProps)
             type="button"
             className="icon-btn"
             title="移除"
-            onClick={() => onCommit(files.filter((item) => item.id !== file.id))}
+            onClick={() => save(files.filter((item) => item.id !== file.id))}
           >
             ✕
           </button>
@@ -350,9 +418,6 @@ function FilesEditor({ value, uploadFile, onCommit, onCancel }: CellEditorProps)
       <div className="row gap">
         <button type="button" className="btn small" disabled={busy} onClick={() => inputRef.current?.click()}>
           {busy ? '上传中…' : '添加文件'}
-        </button>
-        <button type="button" className="btn small ghost" onClick={onCancel}>
-          完成
         </button>
       </div>
       {error ? <span className="error small">{error}</span> : null}

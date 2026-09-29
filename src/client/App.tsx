@@ -55,6 +55,7 @@ function summaryOf(detail: DatabaseDetail): DatabaseSummary {
     ownerId: detail.ownerId,
     role: detail.role,
     locked: detail.locked,
+    viewScoped: detail.viewScoped,
     sharedViewNames: detail.viewScoped ? detail.views.map((view) => view.name) : [],
     createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,

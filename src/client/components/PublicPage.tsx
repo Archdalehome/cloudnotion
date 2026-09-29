@@ -7,7 +7,7 @@ import { FIELD_META } from '../../shared/fields';
 import type { CellValue, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
 import { applyView, visibleProperties } from '../lib/viewEngine';
-import { CellEditor, CellView, type UserNames } from './Cell';
+import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
 
 interface PublicPageProps {
   token: string;
@@ -19,6 +19,9 @@ export function PublicPage({ token }: PublicPageProps) {
   const [error, setError] = useState('');
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
+
+  // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
+  useCloseOnOutsideClick(editing !== null, () => setEditing(null));
 
   useEffect(() => {
     let cancelled = false;
@@ -189,7 +192,11 @@ export function PublicPage({ token }: PublicPageProps) {
                   const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
                   const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
                   return (
-                    <td key={property.id} className="cell cell-view-cell row-height-short">
+                    <td
+                      key={property.id}
+                      className="cell cell-view-cell row-height-short"
+                      data-editing-cell={isEditing ? 'true' : undefined}
+                    >
                       {isEditing ? (
                         <CellEditor
                           property={property}
@@ -198,6 +205,7 @@ export function PublicPage({ token }: PublicPageProps) {
                             setEditing(null);
                             void commitCell(row, property, value);
                           }}
+                          onAutoSave={(value) => void commitCell(row, property, value)}
                           onCancel={() => setEditing(null)}
                         />
                       ) : (

@@ -553,6 +553,19 @@ async function main() {
     `status=${scoped.status} views=${scoped.data?.views?.length ?? 0} rows=${scoped.data?.rows?.length ?? 0}`,
   );
 
+  // 列表接口也要标出「被分享」：前端据此把表格放进侧边栏的「分享表格」而不是「我的表格」
+  const guestList = await call('/api/databases');
+  const guestRow = (guestList.data?.databases ?? []).find((item) => item.id === databaseId);
+  check(
+    'view scoped guest list flags the table as shared',
+    guestRow?.viewScoped === true && (guestRow?.sharedViewNames ?? []).includes(baseView.name),
+    `viewScoped=${guestRow?.viewScoped} views=${JSON.stringify(guestRow?.sharedViewNames ?? [])}`,
+  );
+
+  const guestSession = await call('/api/session');
+  const sessionRow = (guestSession.data?.databases ?? []).find((item) => item.id === databaseId);
+  check('session list flags the shared table too', sessionRow?.viewScoped === true, `viewScoped=${sessionRow?.viewScoped}`);
+
   const scopedWrite = await call(`/api/databases/${databaseId}/records`, { method: 'POST', body: { values: {} } });
   check('view scoped viewer cannot write', scopedWrite.status === 403, `status=${scopedWrite.status}`);
 
@@ -576,6 +589,9 @@ async function main() {
   check('editor view share may write', guestRecord.status === 201, `status=${guestRecord.status}`);
   if (guestRecord.data?.record?.id) await call(`/api/records/${guestRecord.data.record.id}`, { method: 'DELETE' });
   cookie = ownerCookie;
+  const ownerList = await call('/api/databases');
+  const ownerRow = (ownerList.data?.databases ?? []).find((item) => item.id === databaseId);
+  check('own table is not flagged as shared', ownerRow?.viewScoped === false, `viewScoped=${ownerRow?.viewScoped}`);
   const cleanupViewShare = await call(`/api/view-shares/${(reShareView.data?.viewShares ?? [])[0]?.id}`, { method: 'DELETE' });
   check('cleanup the view share', cleanupViewShare.status === 200, `status=${cleanupViewShare.status}`);
 

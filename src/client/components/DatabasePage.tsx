@@ -556,7 +556,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       ) : null}
 
       <div className="view-body">
-        {activeView ? (
+        {/* 定向分享的访客（viewScoped）看不到「＋ 新建筛选」这一整行 */}
+        {activeView && !viewScoped ? (
           <div className="view-toolbar">
             <Popover
               label="＋ 新建筛选"

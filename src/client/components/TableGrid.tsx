@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FIELD_META } from '../../shared/fields';
 import type { CellValue, FileValue, Property, RowRecord, ViewConfig } from '../../shared/types';
-import { CellEditor, CellView, type UserNames } from './Cell';
+import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
 import { Popover } from './Popover';
 
 type RowHeight = NonNullable<ViewConfig['rowHeight']>;
@@ -181,6 +181,9 @@ export function TableGrid(props: TableGridProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [widths, setWidths] = useState<Record<string, number>>({});
 
+  // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
+  useCloseOnOutsideClick(editing !== null, () => setEditing(null));
+
   const widthOf = (property: Property) => widths[property.id] ?? property.width;
 
   const startResize = (event: React.MouseEvent, property: Property) => {
@@ -342,7 +345,11 @@ export function TableGrid(props: TableGridProps) {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
                 const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
                 return (
-                  <td key={property.id} className={`cell cell-view-cell row-height-${rowHeight}`}>
+                  <td
+                    key={property.id}
+                    className={`cell cell-view-cell row-height-${rowHeight}`}
+                    data-editing-cell={isEditing ? 'true' : undefined}
+                  >
                     {isEditing ? (
                       <CellEditor
                         property={property}
@@ -352,6 +359,7 @@ export function TableGrid(props: TableGridProps) {
                           setEditing(null);
                           onCommitCell(row, property, value);
                         }}
+                        onAutoSave={(value) => onCommitCell(row, property, value)}
                         onCancel={() => setEditing(null)}
                       />
                     ) : (

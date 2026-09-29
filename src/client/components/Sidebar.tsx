@@ -36,7 +36,9 @@ export function Sidebar({
   const [templateId, setTemplateId] = useState(TEMPLATES[1]?.id ?? 'blank');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const sharedDatabases = databases.filter((database) => database.sharedViewNames.length > 0);
+  /** 只通过视图定向分享拿到的表格：只出现在「分享表格」里，不再混进「我的表格」 */
+  const sharedDatabases = databases.filter((database) => database.viewScoped);
+  const myDatabases = databases.filter((database) => !database.viewScoped);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -79,6 +81,7 @@ export function Sidebar({
         <div className="row">
           <span>我的表格</span>
           <span className="spacer" />
+          <span className="small muted">{myDatabases.length ? myDatabases.length : ''}</span>
           <button type="button" className="icon-btn" title="新建表格" onClick={() => setCreating((prev) => !prev)}>
             ＋
           </button>
@@ -120,8 +123,8 @@ export function Sidebar({
       ) : null}
 
       <div className="sidebar-list">
-        {databases.length ? (
-          databases.map((database) => (
+        {myDatabases.length ? (
+          myDatabases.map((database) => (
             <button
               key={database.id}
               type="button"
@@ -164,7 +167,11 @@ export function Sidebar({
               type="button"
               className={`sidebar-item${database.id === activeId ? ' active' : ''}`}
               onClick={() => onSelect(database.id)}
-              title={`分享视图：${database.sharedViewNames.join('、')}`}
+              title={
+                database.sharedViewNames.length
+                  ? `分享视图：${database.sharedViewNames.join('、')}`
+                  : database.name
+              }
             >
               <span>🔗</span>
               <span className="label">{database.name}</span>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FIELD_META } from '../../shared/fields';
 import type { CellValue, FileValue, Property, RowRecord } from '../../shared/types';
-import { CellEditor, CellView, computedText, type UserNames } from './Cell';
+import { CellEditor, CellView, computedText, useCloseOnOutsideClick, type UserNames } from './Cell';
 import { Modal } from './Modal';
 
 interface RecordDialogProps {
@@ -30,6 +30,8 @@ export function RecordDialog({
 }: RecordDialogProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const title = properties.find((property) => property.type === 'text')?.name ?? '记录';
+  // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
+  useCloseOnOutsideClick(editingId !== null, () => setEditingId(null));
 
   return (
     <Modal title={title} onClose={onClose} wide>
@@ -44,7 +46,7 @@ export function RecordDialog({
                 {property.locked ? '🔒 ' : ''}
                 {property.name}
               </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ flex: 1, minWidth: 0 }} data-editing-cell={editing ? 'true' : undefined}>
                 {editing ? (
                   <CellEditor
                     property={property}
@@ -54,6 +56,7 @@ export function RecordDialog({
                       setEditingId(null);
                       onCommitCell(property, value);
                     }}
+                    onAutoSave={(value) => onCommitCell(property, value)}
                     onCancel={() => setEditingId(null)}
                   />
                 ) : FIELD_META[property.type].computed ? (

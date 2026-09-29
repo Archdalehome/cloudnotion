@@ -224,6 +224,8 @@ export interface DatabaseSummary {
   role: Role;
   /** true when an owner locked the table structure (fields / views read-only) */
   locked: boolean;
+  /** true when access comes from view shares only - 「分享表格」而不是「我的表格」 */
+  viewScoped: boolean;
   /** names of the views that were shared with the current user (定向分享) */
   sharedViewNames: string[];
   createdAt: number;
