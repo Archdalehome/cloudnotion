@@ -8,12 +8,29 @@ interface SidebarProps {
   user: SessionUser | null;
   databases: DatabaseSummary[];
   activeId: string | null;
+  /** 是否展开（手机上是一个抽屉浮层） */
+  open: boolean;
+  /** 窄屏时用 ✕ 收起抽屉，而不是桌面端的 « */
+  narrow: boolean;
   onSelect: (id: string) => void;
   onCreate: (input: { name: string; templateId: string }) => Promise<void>;
+  /** 收起侧边栏（手机端会同时移除遮罩层） */
+  onClose: () => void;
   onLogout: () => void;
 }
 
-export function Sidebar({ appName, user, databases, activeId, onSelect, onCreate, onLogout }: SidebarProps) {
+export function Sidebar({
+  appName,
+  user,
+  databases,
+  activeId,
+  open,
+  narrow,
+  onSelect,
+  onCreate,
+  onClose,
+  onLogout,
+}: SidebarProps) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [templateId, setTemplateId] = useState(TEMPLATES[1]?.id ?? 'blank');
@@ -38,9 +55,24 @@ export function Sidebar({ appName, user, databases, activeId, onSelect, onCreate
   };
 
   return (
-    <aside className="sidebar">
+    <aside
+      className={`sidebar${open ? ' open' : ''}`}
+      aria-hidden={!open}
+      /* 收起时侧边栏滑出屏外，禁止键盘 Tab 聚焦到看不见的按钮 */
+      inert={open ? undefined : true}
+    >
       <div className="sidebar-head">
         <span className="brand">{appName}</span>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="icon-btn"
+          title="收起侧边栏"
+          aria-label="收起侧边栏"
+          onClick={onClose}
+        >
+          {narrow ? '✕' : '«'}
+        </button>
       </div>
 
       <div className="sidebar-section">
