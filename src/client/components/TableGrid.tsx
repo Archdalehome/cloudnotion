@@ -15,6 +15,8 @@ interface TableGridProps {
   canEditStructure: boolean;
   /** 当前视图未锁定时才可改视图配置（排序 / 筛选 / 隐藏字段） */
   canEditView: boolean;
+  /** 定向分享的访客（viewScoped）不能勾选记录：行首方框只读 */
+  selectable: boolean;
   rowHeight: RowHeight;
   hasMore: boolean;
   onLoadMore: () => void;
@@ -165,6 +167,7 @@ export function TableGrid(props: TableGridProps) {
     canEdit,
     canEditStructure,
     canEditView,
+    selectable,
     rowHeight,
     hasMore,
     onLoadMore,
@@ -213,6 +216,7 @@ export function TableGrid(props: TableGridProps) {
   };
 
   const toggleRow = (id: string) => {
+    if (!selectable) return;
     setSelected((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
 
@@ -272,7 +276,8 @@ export function TableGrid(props: TableGridProps) {
               <input
                 type="checkbox"
                 checked={allSelected}
-                title="全选"
+                disabled={!selectable}
+                title={selectable ? '全选' : '当前视图不可勾选记录'}
                 onChange={() => setSelected(allSelected ? [] : rows.map((row) => row.id))}
               />
             </th>
@@ -339,7 +344,13 @@ export function TableGrid(props: TableGridProps) {
           {rows.map((row) => (
             <tr key={row.id} className={selected.includes(row.id) ? 'selected' : undefined}>
               <td className="row-head">
-                <input type="checkbox" checked={selected.includes(row.id)} onChange={() => toggleRow(row.id)} />
+                <input
+                  type="checkbox"
+                  checked={selected.includes(row.id)}
+                  disabled={!selectable}
+                  title={selectable ? '勾选该记录' : '当前视图不可勾选记录'}
+                  onChange={() => toggleRow(row.id)}
+                />
               </td>
               {properties.map((property) => {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;

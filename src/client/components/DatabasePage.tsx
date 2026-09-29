@@ -484,50 +484,53 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
 
   return (
     <section className="workspace">
-      <header className="topbar">
-        <input
-          className="icon-input"
-          value={detail.icon}
-          maxLength={4}
-          title="图标"
-          disabled={!canEdit}
-          onChange={(event) => setDetail((prev) => ({ ...prev, icon: event.target.value }))}
-          onBlur={(event) => void changeIcon(event.target.value.trim() || '📋')}
-        />
-        <input
-          className="title-input"
-          value={nameDraft}
-          disabled={!canEdit}
-          onChange={(event) => setNameDraft(event.target.value)}
-          onBlur={() => void renameDatabase(nameDraft)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
-          }}
-        />
-        <span className={`badge role-${role}`}>{ROLE_LABEL[role]}</span>
-        {structureLocked ? (
-          <span className="badge" title="表格结构已锁定">
-            🔒 已锁定
-          </span>
-        ) : null}
-        <span className="spacer" />
-        <span className="small muted">{members.length} 位成员 · {total} 条记录</span>
-        <button
-          type="button"
-          className="btn ghost small"
-          onClick={() => {
-            setShareViewId(null);
-            setShareOpen(true);
-          }}
-        >
-          分享与成员
-        </button>
-        {isOwner ? (
-          <button type="button" className="btn ghost small danger" onClick={() => void deleteDatabase()}>
-            删除表格
+      {/* 定向分享的访客（viewScoped）只能看被分享的视图：隐藏「表格名称」这一整行顶部栏 */}
+      {!viewScoped ? (
+        <header className="topbar">
+          <input
+            className="icon-input"
+            value={detail.icon}
+            maxLength={4}
+            title="图标"
+            disabled={!canEdit}
+            onChange={(event) => setDetail((prev) => ({ ...prev, icon: event.target.value }))}
+            onBlur={(event) => void changeIcon(event.target.value.trim() || '📋')}
+          />
+          <input
+            className="title-input"
+            value={nameDraft}
+            disabled={!canEdit}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onBlur={() => void renameDatabase(nameDraft)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
+            }}
+          />
+          <span className={`badge role-${role}`}>{ROLE_LABEL[role]}</span>
+          {structureLocked ? (
+            <span className="badge" title="表格结构已锁定">
+              🔒 已锁定
+            </span>
+          ) : null}
+          <span className="spacer" />
+          <span className="small muted">{members.length} 位成员 · {total} 条记录</span>
+          <button
+            type="button"
+            className="btn ghost small"
+            onClick={() => {
+              setShareViewId(null);
+              setShareOpen(true);
+            }}
+          >
+            分享与成员
           </button>
-        ) : null}
-      </header>
+          {isOwner ? (
+            <button type="button" className="btn ghost small danger" onClick={() => void deleteDatabase()}>
+              删除表格
+            </button>
+          ) : null}
+        </header>
+      ) : null}
 
       {activeView ? (
         <ViewBar
@@ -624,6 +627,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
             canEdit={canEdit}
             canEditStructure={canEditStructure}
             canEditView={viewEditable}
+            selectable={!viewScoped}
             rowHeight={activeView?.config.rowHeight ?? 'short'}
             hasMore={hasMore}
             onLoadMore={() => void loadMore()}

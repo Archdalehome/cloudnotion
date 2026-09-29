@@ -99,9 +99,10 @@ export function CellView({ property, row, users, editable, onEdit, onQuickChange
               target="_blank"
               rel="noreferrer"
               title={`${file.name} · ${fileSizeLabel(file.size)}`}
+              aria-label={`打开文件 ${file.name}`}
               onClick={(event) => event.stopPropagation()}
             >
-              📎 {file.name}
+              📎
             </a>
           ))}
         </span>
@@ -402,8 +403,14 @@ function FilesEditor({ value, uploadFile, onCommit, onAutoSave, onCancel }: Cell
     >
       {files.map((file) => (
         <span key={file.id} className="file-chip">
-          <a href={api.fileUrl(file.id)} target="_blank" rel="noreferrer">
-            {file.name}
+          <a
+            href={api.fileUrl(file.id)}
+            target="_blank"
+            rel="noreferrer"
+            title={`${file.name} · ${fileSizeLabel(file.size)}`}
+            aria-label={`打开文件 ${file.name}`}
+          >
+            📎
           </a>
           <button
             type="button"
