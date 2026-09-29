@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { FIELD_META } from '../../shared/fields';
 import { VIEW_TYPE_LABEL } from '../../shared/views';
 import type { Filters, Property, ViewConfig, ViewDef, ViewType } from '../../shared/types';
-import { FilterPanel, emptyFilters } from './FilterPanel';
+import { FilterPanel, emptyFilters, type FilterUserNames } from './FilterPanel';
 import { Popover } from './Popover';
 
 /** Payload of the "＋ 新建视图" form: 自定义名称 / 筛选 / 锁定 / 定向分享. */
@@ -23,6 +23,8 @@ interface ViewBarProps {
   views: ViewDef[];
   active: ViewDef;
   properties: Property[];
+  /** userId -> 显示名，用于「创建人」等人员类筛选条件 */
+  users?: FilterUserNames;
   /** the active view may be renamed / reconfigured / deleted (false once locked) */
   canEdit: boolean;
   /** may lock / unlock the active view (owner or editor of an unlocked table) */
@@ -166,11 +168,14 @@ function SettingsPanel({
 /** "＋ 新建视图" form: name, type, conditions, lock and optional view share. */
 function NewViewForm({
   properties,
+  users,
   canShare,
   onCancel,
   onSubmit,
 }: {
   properties: Property[];
+  /** userId -> 显示名，用于「创建人」等人员类筛选条件 */
+  users: FilterUserNames;
   canShare: boolean;
   onCancel: () => void;
   onSubmit: (input: NewViewInput) => void;
@@ -207,7 +212,7 @@ function NewViewForm({
       </label>
 
       <div className="menu-label">筛选条件</div>
-      <FilterPanel properties={properties} filters={filters} canEdit onChange={setFilters} />
+      <FilterPanel properties={properties} users={users} filters={filters} canEdit onChange={setFilters} />
 
       <label className="row gap" style={{ marginTop: 8 }}>
         <input type="checkbox" checked={locked} onChange={(event) => setLocked(event.target.checked)} />
@@ -267,6 +272,7 @@ export function ViewBar({
   views,
   active,
   properties,
+  users = {},
   canEdit,
   canUnlock,
   canManage,
@@ -312,6 +318,7 @@ export function ViewBar({
         {(close) => (
           <NewViewForm
             properties={properties}
+            users={users}
             canShare={canManage}
             onCancel={close}
             onSubmit={(input) => {

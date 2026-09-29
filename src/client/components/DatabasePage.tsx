@@ -3,7 +3,7 @@
  * view body (table / board / gallery). Owns every mutation for one database.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { createId, defaultOperatorForType } from '../../shared/fields';
+import { createId, defaultFilterValueForType, defaultOperatorForType } from '../../shared/fields';
 import type {
   CellValue,
   DatabaseDetail,
@@ -95,9 +95,11 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const viewEditable = canEditStructure && !!activeView && !activeView.locked;
   const filterCount = activeView?.config.filters?.conditions.length ?? 0;
   const shownProperties = activeView ? visibleProperties(properties, activeView.config) : properties;
+  /** 筛选上下文：把「当前用户」解析为登录用户 */
+  const filterContext = useMemo(() => ({ viewerId: me?.id ?? null }), [me]);
   const filtered = useMemo(
-    () => (activeView ? applyView(properties, rows, activeView.config) : rows),
-    [properties, rows, activeView],
+    () => (activeView ? applyView(properties, rows, activeView.config, filterContext) : rows),
+    [properties, rows, activeView, filterContext],
   );
   const groups = useMemo(
     () => (activeView ? groupRows(properties, filtered, activeView.config) : []),
@@ -327,7 +329,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
               id: createId(),
               propertyId: property.id,
               operator: defaultOperatorForType(property.type),
-              value: '',
+              // 人员类字段默认「当前用户」，加完就能看到自己创建的记录
+              value: defaultFilterValueForType(property.type),
             },
           ],
         },
@@ -530,6 +533,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
           views={views}
           active={activeView}
           properties={properties}
+          users={users}
           canEdit={viewEditable}
           canUnlock={canEditStructure}
           canManage={isOwner && !viewScoped}
@@ -564,6 +568,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
               {() => (
                 <FilterPanel
                   properties={properties}
+                  users={users}
                   filters={activeView.config.filters}
                   canEdit={viewEditable}
                   onChange={(next) => updateActiveConfig({ filters: next })}

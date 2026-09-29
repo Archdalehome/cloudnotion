@@ -170,9 +170,15 @@ export function operatorsForType(type: FieldType): { value: FilterOperator; labe
         { value: 'is_empty', label: '为空' },
         { value: 'is_not_empty', label: '不为空' },
       ];
-    case 'files':
     case 'created_by':
     case 'updated_by':
+      return [
+        { value: 'is', label: '是' },
+        { value: 'is_not', label: '不是' },
+        { value: 'is_empty', label: '为空' },
+        { value: 'is_not_empty', label: '不为空' },
+      ];
+    case 'files':
       return [
         { value: 'is_empty', label: '为空' },
         { value: 'is_not_empty', label: '不为空' },
@@ -196,6 +202,24 @@ export function defaultOperatorForType(type: FieldType): FilterOperator {
 
 export function operatorsNeedValue(operator: FilterOperator): boolean {
   return !['is_empty', 'is_not_empty', 'is_true', 'is_false'].includes(operator);
+}
+
+/**
+ * 人员类字段（创建人 / 最后编辑人）的值来自行元数据而不是 `row.values`。
+ */
+export function isPersonType(type: FieldType): boolean {
+  return type === 'created_by' || type === 'updated_by';
+}
+
+/**
+ * 筛选条件里的特殊值：解析为「当前用户」。
+ * 客户端解析为登录用户，视图定向分享时由 Worker 解析为访问者，公开分享页解析为表格所有者。
+ */
+export const CURRENT_USER_VALUE = '@me';
+
+/** 新建筛选条件时的默认值：人员类字段默认就是「当前用户」，其它类型留空。 */
+export function defaultFilterValueForType(type: FieldType): string {
+  return isPersonType(type) ? CURRENT_USER_VALUE : '';
 }
 
 /* ------------------------------------------------------------- value helpers */

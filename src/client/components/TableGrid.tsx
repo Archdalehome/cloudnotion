@@ -367,28 +367,30 @@ export function TableGrid(props: TableGridProps) {
                   </td>
                 );
               })}
-              <td className="cell">
-                <div className="row gap" style={{ padding: '0 4px' }}>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    title="复制记录"
-                    disabled={!canEdit}
-                    onClick={() => onDuplicateRows([row])}
-                  >
-                    ⧉
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    title="删除记录"
-                    disabled={!canEdit}
-                    onClick={() => onDeleteRows([row])}
-                  >
-                    🗑
-                  </button>
-                </div>
-              </td>
+              {canEditStructure ? (
+                <td className="cell">
+                  <div className="row gap" style={{ padding: '0 4px' }}>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="复制记录"
+                      disabled={!canEdit}
+                      onClick={() => onDuplicateRows([row])}
+                    >
+                      ⧉
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="删除记录"
+                      disabled={!canEdit}
+                      onClick={() => onDeleteRows([row])}
+                    >
+                      🗑
+                    </button>
+                  </div>
+                </td>
+              ) : null}
             </tr>
           ))}
           {canEdit ? (

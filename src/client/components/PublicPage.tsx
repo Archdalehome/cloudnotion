@@ -46,9 +46,11 @@ export function PublicPage({ token }: PublicPageProps) {
     [payload, activeViewId],
   );
   const columns = activeView ? visibleProperties(properties, activeView.config) : properties;
+  /** 公开链接里没有登录用户，「当前用户」= 表格所有者 */
+  const filterContext = useMemo(() => ({ viewerId: payload?.database.ownerId ?? null }), [payload]);
   const filtered = useMemo(
-    () => (activeView ? applyView(properties, rows, activeView.config) : rows),
-    [properties, rows, activeView],
+    () => (activeView ? applyView(properties, rows, activeView.config, filterContext) : rows),
+    [properties, rows, activeView, filterContext],
   );
 
   const commitCell = useCallback(

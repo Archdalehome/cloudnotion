@@ -2,9 +2,21 @@
  * Multi-condition filter builder (全部满足 / 任意满足) used by the top
  * "＋ 新建筛选" button and by the "new view" form. The operator list comes from
  * the shared field metadata so the client and the worker stay in sync.
+ * 人员类字段（创建人 / 最后编辑人）的值支持「当前用户」，筛选时解析为登录用户。
  */
-import { createId, defaultOperatorForType, operatorsForType, operatorsNeedValue } from '../../shared/fields';
+import {
+  CURRENT_USER_VALUE,
+  createId,
+  defaultFilterValueForType,
+  defaultOperatorForType,
+  isPersonType,
+  operatorsForType,
+  operatorsNeedValue,
+} from '../../shared/fields';
 import type { FilterCondition, FilterOperator, Filters, Property } from '../../shared/types';
+
+/** userId -> 显示名（用于「创建人」等人员类筛选） */
+export type FilterUserNames = Record<string, string>;
 
 /** An empty filter set (used when creating a view without conditions). */
 export function emptyFilters(): Filters {
@@ -17,7 +29,7 @@ export function newCondition(property: Property): FilterCondition {
     id: createId(),
     propertyId: property.id,
     operator: defaultOperatorForType(property.type),
-    value: '',
+    value: defaultFilterValueForType(property.type),
   };
 }
 
@@ -25,9 +37,34 @@ function valueEditor(
   property: Property,
   operator: FilterOperator,
   value: FilterCondition['value'],
+  users: FilterUserNames,
   onChange: (next: string) => void,
 ) {
   if (!operatorsNeedValue(operator)) return null;
+  if (isPersonType(property.type)) {
+    const current = String(value ?? '');
+    const members = Object.entries(users)
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    return (
+      <select
+        className="input"
+        value={current}
+        title="「当前用户（我）」= 打开这个视图的人：登录后是本人，公开链接是表格所有者"
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value={CURRENT_USER_VALUE}>当前用户（我）</option>
+        {members.map((member) => (
+          <option key={member.id} value={member.id}>
+            {member.name}
+          </option>
+        ))}
+        {current && current !== CURRENT_USER_VALUE && !users[current] ? (
+          <option value={current}>已离开的成员</option>
+        ) : null}
+      </select>
+    );
+  }
   if (property.type === 'select' || property.type === 'status' || property.type === 'multi_select') {
     return (
       <select className="input" value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}>
@@ -65,9 +102,18 @@ export interface FilterPanelProps {
   onChange: (next: Filters) => void;
   /** label shown in front of the conjunction selector */
   header?: string;
+  /** userId -> 显示名，人员类字段（创建人 / 最后编辑人）的候选值 */
+  users?: FilterUserNames;
 }
 
-export function FilterPanel({ properties, filters, canEdit, onChange, header = '条件关系' }: FilterPanelProps) {
+export function FilterPanel({
+  properties,
+  filters,
+  canEdit,
+  onChange,
+  header = '条件关系',
+  users = {},
+}: FilterPanelProps) {
   const conjunction: Filters['conjunction'] = filters?.conjunction === 'or' ? 'or' : 'and';
   const conditions = filters?.conditions ?? [];
   const propertyOf = (id: string) => properties.find((item) => item.id === id);
@@ -117,7 +163,7 @@ export function FilterPanel({ properties, filters, canEdit, onChange, header = '
                 patch(condition.id, {
                   propertyId: next.id,
                   operator: defaultOperatorForType(next.type),
-                  value: '',
+                  value: defaultFilterValueForType(next.type),
                 });
               }}
             >
@@ -139,7 +185,9 @@ export function FilterPanel({ properties, filters, canEdit, onChange, header = '
                 </option>
               ))}
             </select>
-            {valueEditor(property, condition.operator, condition.value, (next) => patch(condition.id, { value: next }))}
+            {valueEditor(property, condition.operator, condition.value, users, (next) =>
+              patch(condition.id, { value: next }),
+            )}
             <button
               type="button"
               className="icon-btn"

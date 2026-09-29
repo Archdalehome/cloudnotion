@@ -117,11 +117,11 @@ function scopedProperties(properties: Property[], views: ViewDef[]): Property[] 
 export async function visibleRecords(
   env: Env,
   databaseId: string,
-  viewIds: string[] | null,
+  access: Pick<DatabaseAccess, 'viewIds' | 'userId'>,
   limit: number,
   offset: number,
 ): Promise<{ rows: RowRecord[]; total: number }> {
-  if (!viewIds?.length) {
+  if (!access.viewIds?.length) {
     const [rows, total] = await Promise.all([
       loadRecords(env, databaseId, limit, offset),
       countRecords(env, databaseId),
@@ -131,13 +131,17 @@ export async function visibleRecords(
 
   const [properties, views, scanned] = await Promise.all([
     loadProperties(env, databaseId),
-    loadViews(env, databaseId, viewIds),
+    loadViews(env, databaseId, access.viewIds),
     loadRecords(env, databaseId, SCOPED_ROW_SCAN, 0),
   ]);
   if (!views.length) return { rows: [], total: 0 };
 
   const visibleProperties = scopedProperties(properties, views);
-  const rows = scanned.filter((row) => views.some((view) => rowMatchesView(visibleProperties, row, view.config)));
+  // 定向分享里「当前用户」= 访问者
+  const context = { viewerId: access.userId };
+  const rows = scanned.filter((row) =>
+    views.some((view) => rowMatchesView(visibleProperties, row, view.config, context)),
+  );
   return { rows: rows.slice(offset, offset + limit), total: rows.length };
 }
 
@@ -402,7 +406,7 @@ export async function loadViewShares(env: Env, databaseId: string) {
 export async function buildDatabaseDetail(
   env: Env,
   databaseId: string,
-  access: Pick<DatabaseAccess, 'role' | 'viewIds'>,
+  access: Pick<DatabaseAccess, 'role' | 'viewIds' | 'userId'>,
   url: URL,
 ): Promise<DatabaseDetail> {
   const row = await env.DB.prepare(
@@ -420,7 +424,7 @@ export async function buildDatabaseDetail(
   const [allProperties, allViews, page, members, shares, viewShares] = await Promise.all([
     loadProperties(env, databaseId),
     loadViews(env, databaseId),
-    visibleRecords(env, databaseId, access.viewIds, limit, offset),
+    visibleRecords(env, databaseId, access, limit, offset),
     loadMembers(env, databaseId),
     loadShares(env, databaseId),
     loadViewShares(env, databaseId),
@@ -453,7 +457,7 @@ export async function buildDatabaseDetail(
 
 /** Synthetic access object for the just-created table of `ownerId`. */
 export function ownerAccess(databaseId: string, ownerId: string): DatabaseAccess {
-  return { databaseId, ownerId, role: 'owner', locked: false, viewIds: null };
+  return { databaseId, ownerId, userId: ownerId, role: 'owner', locked: false, viewIds: null };
 }
 
 export async function touchDatabase(env: Env, databaseId: string): Promise<void> {
@@ -503,7 +507,7 @@ async function recordsPageHandler(ctx: RequestContext): Promise<Response> {
   const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
   const limit = clampLimit(ctx.url);
   const offset = clampOffset(ctx.url);
-  const { rows, total } = await visibleRecords(ctx.env, ctx.params.id, access.viewIds, limit, offset);
+  const { rows, total } = await visibleRecords(ctx.env, ctx.params.id, access, limit, offset);
   return json({ rows, total, hasMore: offset + rows.length < total });
 }
 

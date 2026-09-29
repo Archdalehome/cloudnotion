@@ -288,6 +288,9 @@ export interface PublicDatabaseResponse {
     icon: string;
     description: string;
     permission: 'view' | 'edit';
+    /** 表格所有者（公开链接里「当前用户」筛选解析为这个人） */
+    ownerId: string;
+    ownerName: string;
   };
   properties: Property[];
   views: ViewDef[];

@@ -579,6 +579,124 @@ async function main() {
   const cleanupViewShare = await call(`/api/view-shares/${(reShareView.data?.viewShares ?? [])[0]?.id}`, { method: 'DELETE' });
   check('cleanup the view share', cleanupViewShare.status === 200, `status=${cleanupViewShare.status}`);
 
+  // ------------------------------------------------- 人员类筛选（当前用户）
+  section('people filters (当前用户)');
+  const peopleField = await call(`/api/databases/${databaseId}/properties`, {
+    method: 'POST',
+    body: { name: '创建人', type: 'created_by' },
+  });
+  const createdByProperty = (peopleField.data?.properties ?? []).find((property) => property.type === 'created_by');
+  check(
+    'add a 创建人 field',
+    peopleField.status === 201 && Boolean(createdByProperty),
+    `status=${peopleField.status}`,
+  );
+
+  const ownerId = registered.data?.user?.id;
+  const memberId = collaborator.data?.user?.id;
+
+  const meView = await call(`/api/databases/${databaseId}/views`, {
+    method: 'POST',
+    body: {
+      name: '我创建的',
+      type: 'table',
+      config: {
+        filters: {
+          conjunction: 'and',
+          conditions: [{ propertyId: createdByProperty?.id, operator: 'is', value: '@me' }],
+        },
+      },
+    },
+  });
+  const meViewId = meView.data?.viewId;
+  const meCondition = ((meView.data?.views ?? []).find((view) => view.id === meViewId)?.config?.filters?.conditions ?? [])[0];
+  check(
+    'view keeps the 「当前用户」condition',
+    meView.status === 201 && meCondition?.value === '@me' && meCondition?.operator === 'is',
+    `status=${meView.status} value=${meCondition?.value}`,
+  );
+
+  const meShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: meViewId, email: memberEmail, role: 'viewer' },
+  });
+  check('share the 「当前用户」view with the member', meShare.status === 201, `status=${meShare.status}`);
+
+  await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
+  const guestMeView = await call(`/api/databases/${databaseId}`);
+  check(
+    '@me resolves to the visitor, not the table owner',
+    guestMeView.status === 200 && (guestMeView.data?.rows ?? []).length === 0,
+    `status=${guestMeView.status} rows=${guestMeView.data?.rows?.length ?? 0}`,
+  );
+
+  // promote the same share so the guest may add a row of their own
+  cookie = ownerCookie;
+  const meEditorShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: meViewId, email: memberEmail, role: 'editor' },
+  });
+  check('promote the 「当前用户」view share to editor', meEditorShare.status === 201, `status=${meEditorShare.status}`);
+
+  await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
+  const mine = await call(`/api/databases/${databaseId}/records`, {
+    method: 'POST',
+    body: { values: { [titleProperty.id]: '@me 自建记录' } },
+  });
+  const mineId = mine.data?.record?.id;
+  check('guest writes through the shared view', mine.status === 201 && Boolean(mineId), `status=${mine.status}`);
+
+  const guestMine = await call(`/api/databases/${databaseId}`);
+  const mineRow = (guestMine.data?.rows ?? []).find((row) => row.id === mineId);
+  check(
+    '「当前用户」view shows exactly the visitor own row',
+    (guestMine.data?.rows ?? []).length === 1 && mineRow?.createdBy === memberId,
+    `rows=${guestMine.data?.rows?.length ?? 0} createdBy=${mineRow?.createdBy ?? ''} member=${memberId ?? ''}`,
+  );
+
+  // 「不是当前用户」= 别人创建的记录（表格所有者创建的那条依然在）
+  cookie = ownerCookie;
+  const othersView = await call(`/api/databases/${databaseId}/views`, {
+    method: 'POST',
+    body: {
+      name: '别人创建的',
+      type: 'table',
+      config: {
+        filters: {
+          conjunction: 'and',
+          conditions: [{ propertyId: createdByProperty?.id, operator: 'is_not', value: '@me' }],
+        },
+      },
+    },
+  });
+  const othersShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: othersView.data?.viewId, email: memberEmail, role: 'viewer' },
+  });
+  check('share the 「不是当前用户」view', othersShare.status === 201, `status=${othersShare.status}`);
+
+  await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
+  const guestOthers = await call(`/api/databases/${databaseId}`);
+  const othersRows = guestOthers.data?.rows ?? [];
+  check(
+    '「不是当前用户」keeps the rows created by others',
+    othersRows.length >= 2 && othersRows.some((row) => row.id === firstId && row.createdBy === ownerId),
+    `rows=${othersRows.length} ownerRows=${othersRows.filter((row) => row.createdBy === ownerId).length}`,
+  );
+
+  cookie = ownerCookie;
+  const peopleShares = othersShare.data?.viewShares ?? [];
+  let revokedPeopleShares = 0;
+  for (const item of peopleShares) {
+    const removed = await call(`/api/view-shares/${item.id}`, { method: 'DELETE' });
+    if (removed.status === 200) revokedPeopleShares += 1;
+  }
+  check(
+    'revoke the people filter view shares',
+    peopleShares.length > 0 && revokedPeopleShares === peopleShares.length,
+    `${revokedPeopleShares}/${peopleShares.length} view share(s)`,
+  );
+
   // -------------------------------------------------------------------- files
   section('files');
   const form = new FormData();

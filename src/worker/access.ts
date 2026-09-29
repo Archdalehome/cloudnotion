@@ -9,6 +9,8 @@ const REQUIRED: Record<AccessLevel, number> = { view: 0, edit: 1, manage: 2 };
 export interface DatabaseAccess {
   databaseId: string;
   ownerId: string;
+  /** 请求者（用于解析筛选里的「当前用户」） */
+  userId: string;
   role: Role;
   /** structure lock: fields / views are read-only while true */
   locked: boolean;
@@ -70,7 +72,7 @@ export async function requireDatabaseAccess(
   const locked = sqlNumber(row, 'is_locked') === 1;
 
   if (ownerId === user.id) {
-    return { databaseId, ownerId, role: 'owner', locked, viewIds: null };
+    return { databaseId, ownerId, userId: user.id, role: 'owner', locked, viewIds: null };
   }
 
   const member = await env.DB.prepare('SELECT role FROM database_members WHERE database_id = ? AND user_id = ?')
@@ -78,7 +80,7 @@ export async function requireDatabaseAccess(
     .first<SqlRow>();
   const memberRole = member ? sqlString(member, 'role') : '';
   if (memberRole === 'editor' || memberRole === 'viewer') {
-    return { databaseId, ownerId, role: memberRole, locked, viewIds: null };
+    return { databaseId, ownerId, userId: user.id, role: memberRole, locked, viewIds: null };
   }
 
   // fall back to view level shares: the user may only see the shared views
@@ -91,6 +93,7 @@ export async function requireDatabaseAccess(
   return {
     databaseId,
     ownerId,
+    userId: user.id,
     role,
     locked,
     viewIds: rows.results.map((item) => sqlString(item, 'view_id')).filter(Boolean),

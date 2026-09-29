@@ -33,7 +33,9 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
   const offset = Math.max(Math.floor(Number(ctx.url.searchParams.get('offset')) || 0), 0);
 
   const row = await ctx.env.DB.prepare(
-    'SELECT id, name, icon, description FROM databases WHERE id = ? AND is_archived = 0',
+    `SELECT d.id, d.name, d.icon, d.description, d.owner_id, u.name AS owner_name
+       FROM databases d JOIN users u ON u.id = d.owner_id
+      WHERE d.id = ? AND d.is_archived = 0`,
   )
     .bind(share.databaseId)
     .first<SqlRow>();
@@ -53,6 +55,8 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
       icon: sqlString(row, 'icon', '📋'),
       description: sqlString(row, 'description'),
       permission: share.permission,
+      ownerId: sqlString(row, 'owner_id'),
+      ownerName: sqlString(row, 'owner_name'),
     },
     properties,
     views,

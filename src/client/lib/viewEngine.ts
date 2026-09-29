@@ -5,9 +5,10 @@
  */
 import { comparableValue } from '../../shared/fields';
 import type { Property, RowRecord, SelectOption, ViewConfig } from '../../shared/types';
-import { dateishProperty, filterRows, textOf, timestampOf } from '../../shared/viewFilter';
+import { dateishProperty, filterRows, textOf, timestampOf, type FilterContext } from '../../shared/viewFilter';
 
 export { filterRows };
+export type { FilterContext };
 /** Order rows by the view's sort rules (stable, falls back to `position`). */
 export function sortRows(properties: Property[], rows: RowRecord[], config: ViewConfig): RowRecord[] {
   const rules = config.sorts ?? [];
@@ -31,8 +32,13 @@ export function sortRows(properties: Property[], rows: RowRecord[], config: View
 }
 
 /** Filter + sort in one pass (filter first, then order). */
-export function applyView(properties: Property[], rows: RowRecord[], config: ViewConfig): RowRecord[] {
-  return sortRows(properties, filterRows(properties, rows, config), config);
+export function applyView(
+  properties: Property[],
+  rows: RowRecord[],
+  config: ViewConfig,
+  ctx: FilterContext = {},
+): RowRecord[] {
+  return sortRows(properties, filterRows(properties, rows, config, ctx), config);
 }
 
 export function visibleProperties(properties: Property[], config: ViewConfig): Property[] {
