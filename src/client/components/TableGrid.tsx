@@ -41,7 +41,7 @@ interface TableGridProps {
    * 每个格子只有一次修改机会，改过的格子只读。所有者访问时为空集合。
    */
   lockedCells: ReadonlySet<string>;
-  /** 双击一行打开记录卡片 */
+  /** 首列（PO# 等标题列）右侧的「打开」按钮：打开这条记录的卡片 */
   onOpenRecord: (row: RowRecord) => void;
 }
 
@@ -230,13 +230,10 @@ export function TableGrid(props: TableGridProps) {
   };
 
   /**
-   * 双击一行打开记录卡片。单击单元格已经会进入编辑态，所以打开卡片前必须先退出编辑，
-   * 否则编辑框会和卡片同时出现。
+   * 打开记录卡片（点首列右侧的「打开」小按钮触发）。单击单元格已经会进入编辑态，
+   * 所以打开卡片前必须先退出编辑，否则编辑框会和卡片同时出现。
    */
-  const openRowCard = (event: React.MouseEvent<HTMLTableRowElement>, row: RowRecord) => {
-    const target = event.target;
-    // 行首的方框是勾选记录用的：双击它只是勾选 / 取消勾选，不打开卡片
-    if (target instanceof HTMLElement && target.closest('.row-head')) return;
+  const openRowCard = (row: RowRecord) => {
     setEditing(null);
     onOpenRecord(row);
   };
@@ -363,11 +360,7 @@ export function TableGrid(props: TableGridProps) {
 
         <tbody>
           {rows.map((row) => (
-            <tr
-              key={row.id}
-              className={selected.includes(row.id) ? 'selected' : undefined}
-              onDoubleClick={(event) => openRowCard(event, row)}
-            >
+            <tr key={row.id} className={selected.includes(row.id) ? 'selected' : undefined}>
               <td className="row-head">
                 <input
                   type="checkbox"
@@ -377,15 +370,17 @@ export function TableGrid(props: TableGridProps) {
                   onChange={() => toggleRow(row.id)}
                 />
               </td>
-              {properties.map((property) => {
+              {properties.map((property, index) => {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
                 const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
                 /** 共享的可编辑用户每个格子只有一次机会，已经用掉的格子只读 */
                 const spent = lockedCells.has(cellLockKey(row.id, property.id));
+                /** 首列（PO# 等标题列）承载「打开记录卡片」的小按钮 */
+                const lead = index === 0;
                 return (
                   <td
                     key={property.id}
-                    className={`cell cell-view-cell row-height-${rowHeight}`}
+                    className={`cell cell-view-cell row-height-${rowHeight}${lead ? ' has-open-btn' : ''}`}
                     data-editing-cell={isEditing ? 'true' : undefined}
                   >
                     {isEditing ? (
@@ -411,6 +406,17 @@ export function TableGrid(props: TableGridProps) {
                         onQuickChange={(value) => onCommitCell(row, property, value)}
                       />
                     )}
+                    {lead ? (
+                      <button
+                        type="button"
+                        className="cell-open-btn"
+                        title="打开记录卡片"
+                        aria-label="打开记录卡片"
+                        onClick={() => openRowCard(row)}
+                      >
+                        ↗
+                      </button>
+                    ) : null}
                   </td>
                 );
               })}
