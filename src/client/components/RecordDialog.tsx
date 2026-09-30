@@ -56,7 +56,8 @@ export function RecordDialog({
 
   return (
     <Modal title={title} onClose={onClose} wide>
-      <div className="center-list">
+      {/* record-fields：字段行比弹窗默认的 .center-list 更紧凑 */}
+      <div className="center-list record-fields">
         {properties.map((property) => {
           // 字段级锁定：锁定字段只读，内容照常显示
           const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
@@ -316,7 +317,7 @@ function NoteComposer({ candidates, onSubmit }: NoteComposerProps) {
       ) : null}
       <div className="row gap">
         <span className="small muted">
-          {candidates.length ? `${candidates.length} 人可以被 @ 提醒` : '该表格还没有其他协作者'}
+          {candidates.length ? `${candidates.length} 人可以被 @ 提醒` : '还没有其他协作者，先在「分享与成员」里邀请'}
         </span>
         <span className="spacer" />
         {error ? <span className="small error">{error}</span> : null}

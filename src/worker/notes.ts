@@ -9,6 +9,7 @@ import { FIELD_META, formatValueForDisplay } from '../shared/fields';
 import type {
   CellValue,
   InboxMessage,
+  Member,
   NoteMention,
   Property,
   RecordNote,
@@ -22,6 +23,12 @@ import type { Env } from './types';
 const CHUNK = 100;
 /** 收件箱一次最多返回多少条未读私信（红点数字仍按实际未读数） */
 export const INBOX_LIMIT = 50;
+
+/**
+ * 可以被 @ 的人里角色越高越靠前。
+ * 同一个人可能既被邀请成成员、又被定向分享，去重时保留权限更高的角色。
+ */
+const ROLE_RANK: Record<Member['role'], number> = { owner: 3, editor: 2, viewer: 1 };
 
 function sliceList<T>(items: T[], size = CHUNK): T[][] {
   const slices: T[][] = [];
@@ -103,15 +110,55 @@ export async function loadNotes(env: Env, recordIds: string[]): Promise<RecordNo
 }
 
 /** 可以被 @ 的人：所有者 + 表格成员 + 视图定向分享的访客。 */
-export async function mentionableUserIds(env: Env, databaseId: string): Promise<Set<string>> {
+export async function mentionableUsers(env: Env, databaseId: string): Promise<Member[]> {
   const { results } = await env.DB.prepare(
-    `SELECT owner_id AS user_id FROM databases WHERE id = ?
-     UNION SELECT user_id FROM database_members WHERE database_id = ?
-     UNION SELECT user_id FROM view_shares WHERE database_id = ?`,
+    `SELECT d.owner_id AS user_id, u.email AS email, u.name AS name, 'owner' AS role, d.created_at AS created_at
+       FROM databases d JOIN users u ON u.id = d.owner_id
+      WHERE d.id = ?
+     UNION ALL
+     SELECT m.user_id, u.email, u.name, m.role, m.created_at
+       FROM database_members m JOIN users u ON u.id = m.user_id
+      WHERE m.database_id = ?
+     UNION ALL
+     SELECT vs.user_id, u.email, u.name, vs.role, vs.created_at
+       FROM view_shares vs JOIN users u ON u.id = vs.user_id
+      WHERE vs.database_id = ?`,
   )
     .bind(databaseId, databaseId, databaseId)
     .all<SqlRow>();
-  return new Set((results ?? []).map((row) => sqlString(row, 'user_id')).filter(Boolean));
+
+  const byUser = new Map<string, Member>();
+  for (const row of results ?? []) {
+    const userId = sqlString(row, 'user_id');
+    if (!userId) continue;
+    const raw = sqlString(row, 'role');
+    const role: Member['role'] = raw === 'owner' || raw === 'editor' ? raw : 'viewer';
+    const seen = byUser.get(userId);
+    if (seen && ROLE_RANK[seen.role] >= ROLE_RANK[role]) continue;
+    byUser.set(userId, {
+      // 合成的成员 id：前端只把它当成 @ 候选，不会拿去改角色 / 移除成员
+      id: `mention:${userId}`,
+      databaseId,
+      userId,
+      email: sqlString(row, 'email'),
+      name: sqlString(row, 'name'),
+      role,
+      createdAt: sqlNumber(row, 'created_at'),
+    });
+  }
+
+  return [...byUser.values()].sort(
+    (a, b) =>
+      ROLE_RANK[b.role] - ROLE_RANK[a.role] || (a.name || a.email).localeCompare(b.name || b.email),
+  );
+}
+
+/**
+ * 可以被 @ 的人（{@link mentionableUsers}）的 id 集合，供添加备注时校验。
+ * 前端候选名单与服务端校验用的是同一份数据，因此所有者和各个被分享者之间可以互相 @。
+ */
+export async function mentionableUserIds(env: Env, databaseId: string): Promise<Set<string>> {
+  return new Set((await mentionableUsers(env, databaseId)).map((member) => member.userId));
 }
 
 /** 未读私信条数（就是红点里的数字）。 */

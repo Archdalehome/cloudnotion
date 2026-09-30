@@ -177,10 +177,14 @@ export function DatabasePage({
 
   /* --------------------------------------------------------------- notes */
 
-  /** 备注里可以 @ 的人：表格成员去掉自己（自己不需要给自己发私信） */
+  /**
+   * 备注里可以 @ 的人：服务端下发的可 @ 名单（所有者 + 成员 + 定向分享的访客）去掉自己
+   * （自己不需要给自己发私信）。用服务端名单而不是本地 members，
+   * 这样被定向分享的访客既能被 @、也能 @ 别人。
+   */
   const mentionCandidates = useMemo(
-    () => members.filter((member) => member.userId !== me?.id),
-    [members, me],
+    () => detail.mentionables.filter((member) => member.userId !== me?.id),
+    [detail.mentionables, me],
   );
 
   /** 把服务端返回的备注并进本地状态（服务端返回的是按记录分组的完整备注列表） */
@@ -205,7 +209,9 @@ export function DatabasePage({
     try {
       const result = await api.addNote(row.id, { body, mentions });
       mergeNotes(result.notes);
-      const names = members.filter((member) => mentions.includes(member.userId)).map((member) => member.name);
+      const names = mentionCandidates
+        .filter((member) => mentions.includes(member.userId))
+        .map((member) => member.name || member.email);
       onToast(names.length ? `备注已添加，已提醒 ${names.join('、')}` : '备注已添加');
     } catch (cause) {
       fail(cause, '备注添加失败');

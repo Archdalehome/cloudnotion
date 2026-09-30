@@ -807,6 +807,28 @@ async function main() {
     `viewShares=${detailWithViewShare.data?.viewShares?.length ?? 0}`,
   );
 
+  // 可 @ 名单覆盖「定向分享的访客」：所有者能 @ 到被分享者（哪怕对方不是表格成员）
+  const mentionables = detailWithViewShare.data?.mentionables ?? [];
+  check(
+    'the @ candidate list covers view-share guests',
+    mentionables.some((item) => item.userId === notesMemberId),
+    `mentionables=${mentionables.length}`,
+  );
+
+  const ownerToGuest = await call(`/api/records/${firstId}/notes`, {
+    method: 'POST',
+    body: { body: '定向分享的视图也请看一下 @Smoke Collaborator', mentions: [notesMemberId] },
+  });
+  const ownerToGuestNote = (ownerToGuest.data?.notes ?? []).find((note) =>
+    note.body.startsWith('定向分享的视图也请看一下'),
+  );
+  check(
+    'the owner can @ a view-share guest',
+    ownerToGuest.status === 201 &&
+      (ownerToGuestNote?.mentions ?? []).some((item) => item.userId === notesMemberId),
+    `status=${ownerToGuest.status} mentions=${ownerToGuestNote?.mentions?.length ?? 0}`,
+  );
+
   const removeViewShare = await call(`/api/view-shares/${viewShareRow?.id}`, { method: 'DELETE' });
   check(
     'revoke view share',
@@ -860,6 +882,30 @@ async function main() {
     body: { name: '越权字段', type: 'text' },
   });
   check('view scoped viewer cannot change the structure', scopedStructure.status === 403, `status=${scopedStructure.status}`);
+
+  // 反向：被定向分享的访客也能 @ 所有者（备注 @ 不再是表格成员的专属能力）
+  const guestVisibleRecordId = (scoped.data?.rows ?? [])[0]?.id ?? firstId;
+  const guestToOwner = await call(`/api/records/${guestVisibleRecordId}/notes`, {
+    method: 'POST',
+    body: { body: '收到，这边也确认了 @Smoke Tester', mentions: [registered.data?.user?.id] },
+  });
+  const guestToOwnerNote = (guestToOwner.data?.notes ?? []).find((note) =>
+    note.body.startsWith('收到，这边也确认了'),
+  );
+  check(
+    'a view-share guest can @ the owner',
+    guestToOwner.status === 201 &&
+      (guestToOwnerNote?.mentions ?? []).some((item) => item.userId === registered.data?.user?.id),
+    `status=${guestToOwner.status} mentions=${guestToOwnerNote?.mentions?.length ?? 0}`,
+  );
+
+  cookie = ownerCookie;
+  const ownerFromGuest = await call('/api/inbox');
+  check(
+    'the owner gets an inbox message from the view-share guest',
+    (ownerFromGuest.data?.messages ?? []).some((item) => item.noteId === guestToOwnerNote?.id),
+    `messages=${ownerFromGuest.data?.messages?.length ?? 0}`,
+  );
 
   // promote the same share to editor: the guest may then edit the shared view's rows
   cookie = ownerCookie;

@@ -1196,6 +1196,16 @@ textarea.input {
 }
 
 /* 记录卡片底部的备注区：备注只能新增，不能修改 / 删除 */
+/* 记录卡片里的字段列表：行距比弹窗默认的 .center-list 更紧凑 */
+.record-fields {
+  gap: 2px;
+}
+
+.record-fields .cell-view {
+  min-height: 26px;
+  padding: 1px 6px;
+}
+
 .notes {
   display: flex;
   flex-direction: column;
@@ -1300,8 +1310,13 @@ textarea.input {
   position: relative;
   display: inline-flex;
   align-items: center;
-  font-size: 14px;
-  line-height: 1;
+  /* 灰色单色图标：跟随 currentColor（不再用彩色 emoji） */
+  color: var(--text-soft);
+  line-height: 0;
+}
+
+.inbox-icon {
+  display: block;
 }
 
 .inbox-dot {

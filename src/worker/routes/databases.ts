@@ -41,7 +41,7 @@ import {
   viewFromRow,
   viewShareFromRow,
 } from '../mappers';
-import { loadNotes } from '../notes';
+import { loadNotes, mentionableUsers } from '../notes';
 import type { Env, RequestContext, Route } from '../types';
 
 const DEFAULT_PAGE_SIZE = 200;
@@ -463,13 +463,15 @@ export async function buildDatabaseDetail(
   const limit = clampLimit(url);
   const offset = clampOffset(url);
   const scoped = Boolean(access.viewIds?.length);
-  const [allProperties, allViews, page, members, shares, viewShares] = await Promise.all([
+  const [allProperties, allViews, page, members, shares, viewShares, mentionables] = await Promise.all([
     loadProperties(env, databaseId),
     loadViews(env, databaseId),
     visibleRecords(env, databaseId, access, limit, offset),
     loadMembers(env, databaseId),
     loadShares(env, databaseId),
     loadViewShares(env, databaseId),
+    // 备注输入框里的 @ 候选：所有者 + 表格成员 + 定向分享的访客
+    mentionableUsers(env, databaseId),
   ]);
 
   const views = scoped ? allViews.filter((view) => access.viewIds?.includes(view.id)) : allViews;
@@ -505,6 +507,8 @@ export async function buildDatabaseDetail(
     members,
     shares,
     viewShares,
+    // 备注里可以 @ 的人（所有者 + 成员 + 定向分享的访客）
+    mentionables,
     rows: page.rows,
     total: page.total,
     hasMore: offset + page.rows.length < page.total,

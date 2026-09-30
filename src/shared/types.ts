@@ -310,6 +310,12 @@ export interface DatabaseDetail {
   members: Member[];
   shares: Share[];
   viewShares: ViewShare[];
+  /**
+   * 可以被 @ 提醒的人：表格所有者 + 表格成员 + 定向分享的访客。
+   * 备注输入框的 @ 候选名单和后端校验用的是同一份数据，
+   * 所以所有者和各个被分享者之间都能互相 @（公开链接的匿名访客没有身份，不在此列）。
+   */
+  mentionables: Member[];
   rows: RowRecord[];
   total: number;
   hasMore: boolean;
