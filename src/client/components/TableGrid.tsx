@@ -17,6 +17,12 @@ interface TableGridProps {
   canEditView: boolean;
   /** 定向分享的访客（viewScoped）不能勾选记录：行首方框只读 */
   selectable: boolean;
+  /**
+   * 行首方框勾选的记录 id。状态由 DatabasePage 持有：批量操作栏（已选 N 条 / 复制 /
+   * 删除 / 取消选择）显示在「＋ 新建筛选」后面的工具栏里。
+   */
+  selectedIds: string[];
+  onSelectionChange: (ids: string[]) => void;
   rowHeight: RowHeight;
   hasMore: boolean;
   onLoadMore: () => void;
@@ -175,6 +181,8 @@ export function TableGrid(props: TableGridProps) {
     canEditStructure,
     canEditView,
     selectable,
+    selectedIds,
+    onSelectionChange,
     rowHeight,
     hasMore,
     onLoadMore,
@@ -190,7 +198,6 @@ export function TableGrid(props: TableGridProps) {
   } = props;
 
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
   const [widths, setWidths] = useState<Record<string, number>>({});
 
   // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
@@ -226,7 +233,9 @@ export function TableGrid(props: TableGridProps) {
 
   const toggleRow = (id: string) => {
     if (!selectable) return;
-    setSelected((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+    onSelectionChange(
+      selectedIds.includes(id) ? selectedIds.filter((item) => item !== id) : [...selectedIds, id],
+    );
   };
 
   /**
@@ -238,45 +247,19 @@ export function TableGrid(props: TableGridProps) {
     onOpenRecord(row);
   };
 
-  const selectedRows = rows.filter((row) => selected.includes(row.id));
+  const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
   const allSelected = rows.length > 0 && selectedRows.length === rows.length;
   const totalWidth = properties.reduce((sum, property) => sum + widthOf(property), 44) + (canEditStructure ? 130 : 0);
 
   return (
     <div className="grid-wrap">
-      {selectedRows.length || hasMore ? (
+      {/* 勾选记录后的批量操作栏已移到「＋ 新建筛选」后面的工具栏（见 DatabasePage） */}
+      {hasMore ? (
         <div className="grid-toolbar">
-          {selectedRows.length ? (
-            <>
-              <span className="small muted">已选 {selectedRows.length} 条</span>
-              <button
-                type="button"
-                className="btn ghost small"
-                onClick={() => onDuplicateRows(selectedRows)}
-              >
-                复制
-              </button>
-              <button
-                type="button"
-                className="btn ghost small"
-                onClick={() => {
-                  onDeleteRows(selectedRows);
-                  setSelected([]);
-                }}
-              >
-                删除
-              </button>
-              <button type="button" className="btn ghost small" onClick={() => setSelected([])}>
-                取消选择
-              </button>
-            </>
-          ) : null}
           <span className="spacer" />
-          {hasMore ? (
-            <button type="button" className="btn small" onClick={onLoadMore}>
-              加载更多
-            </button>
-          ) : null}
+          <button type="button" className="btn small" onClick={onLoadMore}>
+            加载更多
+          </button>
         </div>
       ) : null}
 
@@ -296,7 +279,7 @@ export function TableGrid(props: TableGridProps) {
                 checked={allSelected}
                 disabled={!selectable}
                 title={selectable ? '全选' : '当前视图不可勾选记录'}
-                onChange={() => setSelected(allSelected ? [] : rows.map((row) => row.id))}
+                onChange={() => onSelectionChange(allSelected ? [] : rows.map((row) => row.id))}
               />
             </th>
             {properties.map((property, index) => (
@@ -350,21 +333,18 @@ export function TableGrid(props: TableGridProps) {
                 </div>
               </th>
             ))}
-            {canEditStructure ? (
-              <th className="add-col" onClick={() => onAddProperty(null)} title="新建字段">
-                ＋ 字段
-              </th>
-            ) : null}
+            {/* 末尾的「＋ 字段」入口已移除：新增字段用表头 ▾ 菜单里的「＋ 在右侧插入」 */}
+            {canEditStructure ? <th className="add-col" /> : null}
           </tr>
         </thead>
 
         <tbody>
           {rows.map((row) => (
-            <tr key={row.id} className={selected.includes(row.id) ? 'selected' : undefined}>
+            <tr key={row.id} className={selectedIds.includes(row.id) ? 'selected' : undefined}>
               <td className="row-head">
                 <input
                   type="checkbox"
-                  checked={selected.includes(row.id)}
+                  checked={selectedIds.includes(row.id)}
                   disabled={!selectable}
                   title={selectable ? '勾选该记录' : '当前视图不可勾选记录'}
                   onChange={() => toggleRow(row.id)}

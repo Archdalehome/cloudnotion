@@ -99,7 +99,7 @@ export function databaseSummaryFromRow(
     ownerId: sqlString(row, 'owner_id'),
     ownerName: sqlNullableString(row, 'owner_name') ?? undefined,
     role,
-    locked: sqlNumber(row, 'is_locked') === 1,
+    locked: false, // 表级锁定已移除：恒为 false
     viewScoped,
     sharedViewNames,
     createdAt: sqlNumber(row, 'created_at'),

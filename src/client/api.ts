@@ -115,7 +115,7 @@ export const api = {
     const suffix = query.toString() ? `?${query}` : '';
     return json<DatabaseDetail>(`/api/databases/${id}${suffix}`, 'GET');
   },
-  updateDatabase: (id: string, body: { name?: string; icon?: string; description?: string; locked?: boolean }) =>
+  updateDatabase: (id: string, body: { name?: string; icon?: string; description?: string }) =>
     json<DatabaseDetail>(`/api/databases/${id}`, 'PATCH', body),
   deleteDatabase: (id: string) => json<{ ok: true }>(`/api/databases/${id}`, 'DELETE'),
   rows: (id: string, params: { limit?: number; offset?: number }) => {

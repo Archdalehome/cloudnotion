@@ -88,6 +88,11 @@ export function DatabasePage({
   const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(
     () => new Set(database.lockedCells ?? []),
   );
+  /**
+   * 表格视图里勾选的记录 id。状态提到这里是因为批量操作栏（已选 N 条 / 复制 / 删除 /
+   * 取消选择）显示在「＋ 新建筛选」后面，而不是表格上方。
+   */
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
 
   useEffect(() => {
     setDetail(database);
@@ -96,6 +101,7 @@ export function DatabasePage({
     setHasMore(database.hasMore);
     setLockedCells(new Set(database.lockedCells ?? []));
     setNameDraft(database.name);
+    setSelectedRowIds([]);
     setActiveViewId((prev) =>
       prev && database.views.some((view) => view.id === prev) ? prev : database.views[0]?.id ?? null,
     );
@@ -105,11 +111,10 @@ export function DatabasePage({
   const role: Role = detail.role;
   const canEdit = role === 'owner' || role === 'editor';
   const isOwner = role === 'owner';
-  /** 表格锁定：字段与视图结构不可修改 */
-  const structureLocked = detail.locked;
   /** 仅通过视图定向分享获得的访问权（只能看到被分享的视图） */
   const viewScoped = detail.viewScoped;
-  const canEditStructure = canEdit && !structureLocked && !viewScoped;
+  /** 字段 / 视图结构是否可改：只看访问权（表级锁定功能已移除） */
+  const canEditStructure = canEdit && !viewScoped;
 
   const users = useMemo<UserNames>(() => {
     // 行元数据（创建人 / 最后编辑人）里的用户可能只是被定向分享的访客，不在成员列表中
@@ -129,6 +134,11 @@ export function DatabasePage({
   const filtered = useMemo(
     () => (activeView ? applyView(properties, rows, activeView.config, filterContext) : rows),
     [properties, rows, activeView, filterContext],
+  );
+  /** 当前视图（应用筛选后）里被勾选的记录：供「＋ 新建筛选」后面的批量操作栏使用 */
+  const selectedRows = useMemo(
+    () => filtered.filter((row) => selectedRowIds.includes(row.id)),
+    [filtered, selectedRowIds],
   );
   const groups = useMemo(
     () => (activeView ? groupRows(properties, filtered, activeView.config) : []),
@@ -438,18 +448,6 @@ export function DatabasePage({
     void patchView(viewId, { locked });
   };
 
-  const lockTable = async (locked: boolean) => {
-    if (!isOwner) return;
-    try {
-      const next = await api.updateDatabase(detail.id, { locked });
-      setDetail((prev) => ({ ...prev, locked: next.locked }));
-      onToast(locked ? '表格已锁定，字段与视图不可修改' : '表格已解锁');
-      onReloadList();
-    } catch (cause) {
-      fail(cause, locked ? '锁定表格失败' : '解锁表格失败');
-    }
-  };
-
   const deleteView = async (viewId: string) => {
     if (!viewEditable) return;
     try {
@@ -656,11 +654,6 @@ export function DatabasePage({
             }}
           />
           <span className={`badge role-${role}`}>{ROLE_LABEL[role]}</span>
-          {structureLocked ? (
-            <span className="badge" title="表格结构已锁定">
-              🔒 已锁定
-            </span>
-          ) : null}
           <span className="spacer" />
           <span className="small muted">{members.length} 位成员 · {total} 条记录</span>
           {isOwner ? (
@@ -680,16 +673,17 @@ export function DatabasePage({
           canEdit={viewEditable}
           canUnlock={canEditStructure}
           canManage={isOwner && !viewScoped}
-          structureLocked={structureLocked}
           total={total}
           rowCount={filtered.length}
-          onSelectView={(id) => setActiveViewId(id)}
+          onSelectView={(id) => {
+            setActiveViewId(id);
+            setSelectedRowIds([]);
+          }}
           onCreateView={(input) => void createView(input)}
           onRenameView={renameView}
           onDeleteView={(id) => void deleteView(id)}
           onUpdateConfig={updateActiveConfig}
           onLockView={lockView}
-          onLockTable={(locked) => void lockTable(locked)}
           onShareView={(id) => {
             setShareViewId(id);
             setShareOpen(true);
@@ -723,9 +717,33 @@ export function DatabasePage({
               <span className="small muted">
                 {`${activeView.config.filters?.conjunction === 'or' ? '任意满足' : '全部满足'} ${filterCount} 个条件 · 命中 ${filtered.length} 条`}
               </span>
-            ) : (
-              <span className="small muted">为「{activeView.name}」添加多个筛选条件，支持「全部满足 / 任意满足」</span>
-            )}
+            ) : null}
+            {/* 勾选记录后的批量操作栏：跟在「＋ 新建筛选」后面（原来在表格上方） */}
+            {selectedRows.length ? (
+              <>
+                <span className="small muted">已选 {selectedRows.length} 条</span>
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => void duplicateRows(selectedRows)}
+                >
+                  复制
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => {
+                    void deleteRows(selectedRows);
+                    setSelectedRowIds([]);
+                  }}
+                >
+                  删除
+                </button>
+                <button type="button" className="btn ghost small" onClick={() => setSelectedRowIds([])}>
+                  取消选择
+                </button>
+              </>
+            ) : null}
           </div>
         ) : null}
         {activeView?.type === 'board' ? (
@@ -767,6 +785,8 @@ export function DatabasePage({
             canEditStructure={canEditStructure}
             canEditView={viewEditable}
             selectable={!viewScoped}
+            selectedIds={selectedRowIds}
+            onSelectionChange={setSelectedRowIds}
             rowHeight={activeView?.config.rowHeight ?? 'short'}
             hasMore={hasMore}
             onLoadMore={() => void loadMore()}

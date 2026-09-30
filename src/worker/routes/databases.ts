@@ -21,7 +21,6 @@ import {
   asString,
   badRequest,
   conflict,
-  forbidden,
   json,
   newId,
   normalizeEmail,
@@ -498,7 +497,8 @@ export async function buildDatabaseDetail(
     description: sqlString(row, 'description'),
     ownerId: sqlString(row, 'owner_id'),
     role: access.role,
-    locked: sqlNumber(row, 'is_locked') === 1,
+    // 表级锁定已移除：字段保留（客户端类型仍需要它），恒为 false
+    locked: false,
     viewScoped: scoped,
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
@@ -527,7 +527,6 @@ export function ownerAccess(databaseId: string, ownerId: string): DatabaseAccess
     ownerId,
     userId: ownerId,
     role: 'owner',
-    locked: false,
     viewIds: null,
     limitCellEdits: false,
   };
@@ -614,11 +613,7 @@ async function updateHandler(ctx: RequestContext): Promise<Response> {
     fields.push('description = ?');
     values.push(asString(body.description, '描述', { max: 500 }));
   }
-  if (body.locked !== undefined) {
-    if (access.role !== 'owner') throw forbidden('只有所有者可以锁定或解锁表格');
-    fields.push('is_locked = ?');
-    values.push(body.locked ? 1 : 0);
-  }
+  // body.locked 已被忽略：表级锁定功能已移除（老的客户端传参不再有任何效果）
   if (!fields.length) return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access, ctx.url));
 
   fields.push('updated_at = ?');

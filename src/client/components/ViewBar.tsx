@@ -1,5 +1,5 @@
 /**
- * View tabs + the view level toolbar (设置 / 表格锁定 / 分享 / ⋯).
+ * View tabs + the view level toolbar (设置 / 分享 / ⋯).
  * Filter conditions are edited from the "＋ 新建筛选" button rendered above the
  * view body (see DatabasePage) and from the "＋ 新建视图" form below.
  */
@@ -31,10 +31,8 @@ interface ViewBarProps {
   canEdit: boolean;
   /** may lock / unlock the active view (owner or editor of an unlocked table) */
   canUnlock: boolean;
-  /** owner only actions: 表格锁定 + 视图定向分享 */
+  /** owner only actions: 该视图的定向分享 */
   canManage: boolean;
-  /** the table structure is locked (fields / views are read-only) */
-  structureLocked: boolean;
   total: number;
   rowCount: number;
   onSelectView: (id: string) => void;
@@ -43,7 +41,6 @@ interface ViewBarProps {
   onDeleteView: (id: string) => void;
   onUpdateConfig: (patch: Partial<ViewConfig>) => void;
   onLockView: (id: string, locked: boolean) => void;
-  onLockTable: (locked: boolean) => void;
   onShareView: (id: string) => void;
 }
 
@@ -294,7 +291,6 @@ export function ViewBar({
   canEdit,
   canUnlock,
   canManage,
-  structureLocked,
   total,
   rowCount,
   onSelectView,
@@ -303,7 +299,6 @@ export function ViewBar({
   onDeleteView,
   onUpdateConfig,
   onLockView,
-  onLockTable,
   onShareView,
 }: ViewBarProps) {
   const [draftName, setDraftName] = useState(active.name);
@@ -327,12 +322,7 @@ export function ViewBar({
         </button>
       ))}
 
-      <Popover
-        label="＋"
-        title={structureLocked ? '表格已锁定，无法新建视图' : '新建视图'}
-        wide
-        disabled={!canEdit || structureLocked}
-      >
+      <Popover label="＋" title="新建视图" wide disabled={!canEdit}>
         {(close) => (
           <NewViewForm
             properties={properties}
@@ -361,21 +351,6 @@ export function ViewBar({
       <Popover label="设置" wide disabled={!canEdit}>
         {() => <SettingsPanel view={active} properties={properties} canEdit={canEdit} onChange={onUpdateConfig} />}
       </Popover>
-
-      {canManage ? (
-        <button
-          type="button"
-          className={`btn ghost small${structureLocked ? ' active' : ''}`}
-          title={structureLocked ? '解锁表格结构' : '锁定表格结构（字段与视图不可修改）'}
-          onClick={() => onLockTable(!structureLocked)}
-        >
-          {structureLocked ? '🔒 已锁定' : '🔓 表格锁定'}
-        </button>
-      ) : structureLocked ? (
-        <span className="badge" title="表格结构已锁定">
-          🔒 已锁定
-        </span>
-      ) : null}
 
       {canManage ? (
         <button

@@ -281,7 +281,7 @@ export interface DatabaseSummary {
   ownerId: string;
   ownerName?: string;
   role: Role;
-  /** true when an owner locked the table structure (fields / views read-only) */
+  /** 表级锁定功能已移除，恒为 false（保留字段以兼容旧数据 / 旧客户端） */
   locked: boolean;
   /** true when access comes from view shares only - 「分享表格」而不是「我的表格」 */
   viewScoped: boolean;
@@ -299,7 +299,7 @@ export interface DatabaseDetail {
   description: string;
   ownerId: string;
   role: Role;
-  /** structure lock: fields / views cannot be changed while true */
+  /** 表级锁定功能已移除，恒为 false（保留字段以兼容旧数据 / 旧客户端） */
   locked: boolean;
   /** true when access comes from view shares only - rows/views are scoped */
   viewScoped: boolean;

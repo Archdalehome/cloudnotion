@@ -505,7 +505,7 @@ textarea.input {
   cursor: pointer;
 }
 
-/* 表格锁定后表头字段不可点击（不弹出修改窗口） */
+/* 没有结构编辑权（访客 / 定向分享）时表头字段不可点击（不弹出修改窗口） */
 .grid thead th .head .name.static {
   cursor: default;
 }
@@ -715,11 +715,10 @@ textarea.input {
   text-overflow: ellipsis;
 }
 
+/* 末尾的操作列（每行的复制 / 删除按钮）：表头只作占位，不再显示「＋ 字段」 */
 .add-col {
   width: 130px;
   min-width: 130px;
-  color: var(--text-faint);
-  cursor: pointer;
 }
 
 .grid-toolbar {

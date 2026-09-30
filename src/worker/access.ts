@@ -12,8 +12,6 @@ export interface DatabaseAccess {
   /** 请求者（用于解析筛选里的「当前用户」） */
   userId: string;
   role: Role;
-  /** structure lock: fields / views are read-only while true */
-  locked: boolean;
   /** non-null when the user only sees a set of shared views */
   viewIds: string[] | null;
   /**
@@ -69,15 +67,15 @@ export async function requireDatabaseAccess(
   user: AuthedUser,
   level: AccessLevel = 'view',
 ): Promise<DatabaseAccess> {
-  const row = await env.DB.prepare('SELECT owner_id, is_archived, is_locked FROM databases WHERE id = ?')
+  // 表级锁定（is_locked）功能已移除：字段与视图结构只由访问权与定向分享决定
+  const row = await env.DB.prepare('SELECT owner_id, is_archived FROM databases WHERE id = ?')
     .bind(databaseId)
     .first<SqlRow>();
   if (!row || Number(row.is_archived ?? 0) === 1) throw notFound('表格不存在');
   const ownerId = sqlString(row, 'owner_id');
-  const locked = sqlNumber(row, 'is_locked') === 1;
 
   if (ownerId === user.id) {
-    return { databaseId, ownerId, userId: user.id, role: 'owner', locked, viewIds: null, limitCellEdits: false };
+    return { databaseId, ownerId, userId: user.id, role: 'owner', viewIds: null, limitCellEdits: false };
   }
 
   const member = await env.DB.prepare('SELECT role FROM database_members WHERE database_id = ? AND user_id = ?')
@@ -86,7 +84,7 @@ export async function requireDatabaseAccess(
   const memberRole = member ? sqlString(member, 'role') : '';
   if (memberRole === 'editor' || memberRole === 'viewer') {
     // 表格成员不受「限制编辑」约束：那是分享链接 / 视图分享上的开关
-    return { databaseId, ownerId, userId: user.id, role: memberRole, locked, viewIds: null, limitCellEdits: false };
+    return { databaseId, ownerId, userId: user.id, role: memberRole, viewIds: null, limitCellEdits: false };
   }
 
   // fall back to view level shares: the user may only see the shared views
@@ -104,15 +102,13 @@ export async function requireDatabaseAccess(
     ownerId,
     userId: user.id,
     role,
-    locked,
     viewIds: rows.results.map((item) => sqlString(item, 'view_id')).filter(Boolean),
     limitCellEdits,
   };
 }
 
-/** Structure (fields / views) may only change while the table is unlocked and fully shared. */
+/** Structure (fields / views) may only change for a fully shared table (定向分享除外). */
 export function assertStructureEditable(access: DatabaseAccess): void {
-  if (access.locked) throw forbidden('表格已锁定，字段与视图暂时无法修改');
   if (access.viewIds) throw forbidden('当前为视图定向分享，无法修改表格结构');
 }
 

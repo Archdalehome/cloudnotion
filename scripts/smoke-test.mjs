@@ -346,25 +346,35 @@ async function main() {
     `status=${deleteLocked.status}`,
   );
 
-  // -------------------------------------------------------- structure lock
-  section('table structure lock');
-  const lockTable = await call(`/api/databases/${databaseId}`, { method: 'PATCH', body: { locked: true } });
-  check('lock table structure', lockTable.status === 200 && lockTable.data?.locked === true, `status=${lockTable.status}`);
-
-  const blockedView = await call(`/api/databases/${databaseId}/views`, { method: 'POST', body: { type: 'table' } });
-  check('locked table rejects new view', blockedView.status === 403, `status=${blockedView.status}`);
-
-  const blockedProperty = await call(`/api/databases/${databaseId}/properties`, {
-    method: 'POST',
-    body: { name: '锁定期间字段', type: 'text' },
+  // ----------------------------- 表级锁定已移除（locked 参数被忽略，结构始终可改）
+  section('table lock removed');
+  const ignoredLock = await call(`/api/databases/${databaseId}`, {
+    method: 'PATCH',
+    body: { locked: true },
   });
-  check('locked table rejects new field', blockedProperty.status === 403, `status=${blockedProperty.status}`);
+  check(
+    'table lock parameter is ignored',
+    ignoredLock.status === 200 && ignoredLock.data?.locked === false,
+    `status=${ignoredLock.status} locked=${ignoredLock.data?.locked}`,
+  );
 
-  const blockedPatch = await call(`/api/properties/${titleProperty.id}`, { method: 'PATCH', body: { name: '改名尝试' } });
-  check('locked table rejects field rename', blockedPatch.status === 403, `status=${blockedPatch.status}`);
+  const probeField = await call(`/api/databases/${databaseId}/properties`, {
+    method: 'POST',
+    body: { name: '锁定参数已忽略', type: 'text' },
+  });
+  check(
+    'structure stays editable after locked=true',
+    probeField.status === 201,
+    `status=${probeField.status}`,
+  );
 
-  const unlockTable = await call(`/api/databases/${databaseId}`, { method: 'PATCH', body: { locked: false } });
-  check('unlock table structure', unlockTable.status === 200 && unlockTable.data?.locked === false, `status=${unlockTable.status}`);
+  const probeProperty = (probeField.data?.properties ?? []).find(
+    (property) => property.name === '锁定参数已忽略',
+  );
+  const removedProbe = probeProperty
+    ? await call(`/api/properties/${probeProperty.id}`, { method: 'DELETE' })
+    : null;
+  check('cleanup the probe field', removedProbe === null || removedProbe.status === 200, `status=${removedProbe?.status}`);
 
   const viewsBefore = (patchedView.data?.views ?? []).length;
   const removedView = await call(`/api/views/${boardViewId}`, { method: 'DELETE' });
