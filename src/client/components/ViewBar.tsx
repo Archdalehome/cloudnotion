@@ -12,6 +12,7 @@ import { Popover } from './Popover';
 
 /** Payload of the "＋ 新建视图" form: 自定义名称 / 筛选 / 锁定 / 定向分享. */
 export interface NewViewInput {
+  /** 恒为 'table'：UI 上不再让用户选视图类型（见 NEW_VIEW_TYPE） */
   type: ViewType;
   name: string;
   filters: Filters;
@@ -47,6 +48,9 @@ interface ViewBarProps {
 }
 
 const VIEW_ICON: Record<ViewType, string> = { table: '▤', board: '▥', gallery: '▦' };
+
+/** 新建视图固定为表格类型：表单里不再提供类型选择，避免误建看板 / 画廊视图 */
+const NEW_VIEW_TYPE: ViewType = 'table';
 
 function SettingsPanel({
   view,
@@ -166,7 +170,7 @@ function SettingsPanel({
   );
 }
 
-/** "＋ 新建视图" form: name, type, conditions, lock and optional view share. */
+/** "＋ 新建视图" form: name, conditions, lock and optional view share. 类型固定为表格。 */
 function NewViewForm({
   properties,
   users,
@@ -181,7 +185,6 @@ function NewViewForm({
   onCancel: () => void;
   onSubmit: (input: NewViewInput) => void;
 }) {
-  const [type, setType] = useState<ViewType>('table');
   const [name, setName] = useState('');
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [locked, setLocked] = useState(false);
@@ -198,21 +201,21 @@ function NewViewForm({
           className="input"
           value={name}
           autoFocus
-          placeholder={`默认：${VIEW_TYPE_LABEL[type]}视图`}
+          placeholder={`默认：${VIEW_TYPE_LABEL[NEW_VIEW_TYPE]}视图`}
           onChange={(event) => setName(event.target.value)}
         />
       </label>
 
-      <label className="field">
+      {/* 新建视图不再选类型：固定为表格类型 */}
+      <div className="field">
         <span>视图类型</span>
-        <select className="input" value={type} onChange={(event) => setType(event.target.value as ViewType)}>
-          {(['table', 'board', 'gallery'] as ViewType[]).map((item) => (
-            <option key={item} value={item}>
-              {VIEW_ICON[item]} {VIEW_TYPE_LABEL[item]}
-            </option>
-          ))}
-        </select>
-      </label>
+        <div className="row gap" style={{ alignItems: 'center' }}>
+          <span className="badge">
+            {VIEW_ICON[NEW_VIEW_TYPE]} {VIEW_TYPE_LABEL[NEW_VIEW_TYPE]}
+          </span>
+          <span className="small muted">新建视图固定为表格类型</span>
+        </div>
+      </div>
 
       <div className="menu-label">筛选条件</div>
       <FilterPanel properties={properties} users={users} filters={filters} canEdit onChange={setFilters} />
@@ -265,7 +268,7 @@ function NewViewForm({
           className="btn primary small"
           onClick={() =>
             onSubmit({
-              type,
+              type: NEW_VIEW_TYPE,
               name: name.trim(),
               filters,
               locked,

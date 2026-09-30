@@ -141,6 +141,19 @@ async function main() {
   check('role is owner', created.data?.role === 'owner', textOf(created.data?.role));
   check('members include the owner', (created.data?.members?.length ?? 0) === 1);
 
+  // 新建表格不再让用户挑模板：不传 templateId 时应当落成「空白表格」（只有一个「名称」字段）
+  const blankTable = await call('/api/databases', { method: 'POST', body: { name: '空白表格' } });
+  const blankFields = blankTable.data?.properties ?? [];
+  check(
+    'table created without templateId is blank',
+    blankTable.status === 201 && blankFields.length === 1 && blankFields[0]?.name === '名称',
+    `status=${blankTable.status} fields=${blankFields.map((property) => property.name).join('/')}`,
+  );
+  if (blankTable.data?.id) {
+    const removedBlank = await call(`/api/databases/${blankTable.data.id}`, { method: 'DELETE' });
+    check('cleanup the blank table', removedBlank.status === 200, `status=${removedBlank.status}`);
+  }
+
   const titleProperty = (created.data.properties ?? []).find((property) => property.type === 'text');
   const statusProperty = (created.data.properties ?? []).find((property) => property.type === 'select');
   const checkProperty = (created.data.properties ?? []).find((property) => property.type === 'checkbox');
@@ -259,6 +272,24 @@ async function main() {
   });
   const boardViewId = newView.data?.viewId;
   check('create board view', newView.status === 201 && Boolean(boardViewId), `status=${newView.status}`);
+
+  // 前端「＋ 新建视图」不再传 type：后端应当默认落成表格视图
+  const defaultTypeView = await call(`/api/databases/${databaseId}/views`, {
+    method: 'POST',
+    body: { name: '默认类型视图' },
+  });
+  const defaultTypeRow = (defaultTypeView.data?.views ?? []).find(
+    (view) => view.id === defaultTypeView.data?.viewId,
+  );
+  check(
+    'view created without a type stays a table view',
+    defaultTypeView.status === 201 && defaultTypeRow?.type === 'table',
+    `status=${defaultTypeView.status} type=${defaultTypeRow?.type}`,
+  );
+  if (defaultTypeRow) {
+    const removedDefaultType = await call(`/api/views/${defaultTypeRow.id}`, { method: 'DELETE' });
+    check('delete the default type view', removedDefaultType.status === 200, `status=${removedDefaultType.status}`);
+  }
 
   const patchedView = await call(`/api/views/${baseView.id}`, {
     method: 'PATCH',

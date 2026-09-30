@@ -267,8 +267,9 @@ export function App() {
   }, []);
 
   const createDatabase = useCallback(
-    async ({ name, templateId }: { name: string; templateId: string }) => {
-      const created = await api.createDatabase({ name, templateId });
+    /** 新建表格固定走「空白表格」模板（不传 templateId 时后端就是 blank），不再让用户挑选模板 */
+    async ({ name }: { name: string }) => {
+      const created = await api.createDatabase({ name });
       setDatabases((prev) => [summaryOf(created), ...prev.filter((item) => item.id !== created.id)]);
       setDetail(created);
       setActiveId(created.id);

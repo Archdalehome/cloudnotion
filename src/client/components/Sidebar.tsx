@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { TEMPLATES } from '../../shared/templates';
 import type { DatabaseSummary, InboxMessage, SessionUser } from '../../shared/types';
 import { ApiError } from '../api';
 import { InboxButton } from './InboxButton';
@@ -18,7 +17,7 @@ interface SidebarProps {
   /** 窄屏时用 ✕ 收起抽屉，而不是桌面端的 « */
   narrow: boolean;
   onSelect: (id: string) => void;
-  onCreate: (input: { name: string; templateId: string }) => Promise<void>;
+  onCreate: (input: { name: string }) => Promise<void>;
   /** 收起侧边栏（手机端会同时移除遮罩层） */
   onClose: () => void;
   onLogout: () => void;
@@ -46,7 +45,6 @@ export function Sidebar({
 }: SidebarProps) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
-  const [templateId, setTemplateId] = useState(TEMPLATES[1]?.id ?? 'blank');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   /** 只通过视图定向分享拿到的表格：只出现在「分享表格」里，不再混进「我的表格」 */
@@ -59,7 +57,7 @@ export function Sidebar({
     setBusy(true);
     setError('');
     try {
-      await onCreate({ name: name.trim(), templateId });
+      await onCreate({ name: name.trim() });
       setName('');
       setCreating(false);
     } catch (cause) {
@@ -108,6 +106,7 @@ export function Sidebar({
         </div>
       </div>
 
+      {/* 新建表格固定落成空白表格（只有「名称」字段），不再让用户挑模板 */}
       {creating ? (
         <form onSubmit={submit} style={{ padding: '0 12px 8px' }}>
           <label className="field">
@@ -119,16 +118,6 @@ export function Sidebar({
               onChange={(event) => setName(event.target.value)}
               placeholder="例如：项目排期"
             />
-          </label>
-          <label className="field">
-            <span>模板</span>
-            <select className="input" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
-              {TEMPLATES.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.icon} {template.name}
-                </option>
-              ))}
-            </select>
           </label>
           {error ? <p className="error small">{error}</p> : null}
           <div className="row gap">
