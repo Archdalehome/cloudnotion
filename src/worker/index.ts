@@ -10,6 +10,7 @@ import { errorToResponse, json } from './http';
 import { authRoutes } from './routes/auth';
 import { databaseRoutes } from './routes/databases';
 import { fileRoutes } from './routes/files';
+import { noteRoutes } from './routes/notes';
 import { propertyRoutes } from './routes/properties';
 import { publicRoutes } from './routes/public';
 import { recordRoutes } from './routes/records';
@@ -21,6 +22,7 @@ const API_ROUTES: Route[] = [
   ...databaseRoutes,
   ...propertyRoutes,
   ...recordRoutes,
+  ...noteRoutes,
   ...viewRoutes,
   ...fileRoutes,
   ...publicRoutes,

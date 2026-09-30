@@ -11,6 +11,8 @@ interface PopoverProps {
   variant?: 'ghost' | 'primary';
   /** which edge of the trigger the panel is aligned to (default: right) */
   align?: 'left' | 'right';
+  /** 面板打开时回调（例如打开收件箱前先刷新一次未读私信） */
+  onOpen?: () => void;
   /** render prop receiving a close() helper */
   children: (close: () => void) => React.ReactNode;
 }
@@ -42,6 +44,7 @@ export function Popover({
   disabled,
   variant = 'ghost',
   align = 'right',
+  onOpen,
   children,
 }: PopoverProps) {
   const [open, setOpen] = useState(false);
@@ -110,7 +113,11 @@ export function Popover({
         className={`btn ${variant === 'primary' ? 'primary' : 'ghost'} small${open ? ' active' : ''}`}
         title={title}
         disabled={disabled}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          if (next) onOpen?.();
+        }}
       >
         {label}
       </button>

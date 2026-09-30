@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { TEMPLATES } from '../../shared/templates';
-import type { DatabaseSummary, SessionUser } from '../../shared/types';
+import type { DatabaseSummary, InboxMessage, SessionUser } from '../../shared/types';
 import { ApiError } from '../api';
+import { InboxButton } from './InboxButton';
 import { UserChip } from './UserChip';
 
 interface SidebarProps {
@@ -9,6 +10,9 @@ interface SidebarProps {
   user: SessionUser | null;
   databases: DatabaseSummary[];
   activeId: string | null;
+  /** 未读私信（收件箱左上角图标 + 红点数字） */
+  inbox: InboxMessage[];
+  inboxUnread: number;
   /** 是否展开（手机上是一个抽屉浮层） */
   open: boolean;
   /** 窄屏时用 ✕ 收起抽屉，而不是桌面端的 « */
@@ -18,6 +22,10 @@ interface SidebarProps {
   /** 收起侧边栏（手机端会同时移除遮罩层） */
   onClose: () => void;
   onLogout: () => void;
+  /** 展开收件箱前刷新一次 */
+  onInboxRefresh: () => void;
+  /** 点开一条私信：已读 + 打开记录卡片并定位到那条备注 */
+  onInboxSelect: (message: InboxMessage) => void;
 }
 
 export function Sidebar({
@@ -25,12 +33,16 @@ export function Sidebar({
   user,
   databases,
   activeId,
+  inbox,
+  inboxUnread,
   open,
   narrow,
   onSelect,
   onCreate,
   onClose,
   onLogout,
+  onInboxRefresh,
+  onInboxSelect,
 }: SidebarProps) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
@@ -66,6 +78,13 @@ export function Sidebar({
     >
       <div className="sidebar-head">
         <span className="brand">{appName}</span>
+        {/* 左上角的收件箱：红点里的数字是未读私信条数 */}
+        <InboxButton
+          messages={inbox}
+          unread={inboxUnread}
+          onRefresh={onInboxRefresh}
+          onSelect={onInboxSelect}
+        />
         <span className="spacer" />
         <button
           type="button"

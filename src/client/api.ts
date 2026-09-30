@@ -6,9 +6,11 @@ import type {
   DatabaseDetail,
   DatabaseSummary,
   FieldType,
+  InboxResponse,
   Property,
   PropertyConfig,
   PublicDatabaseResponse,
+  RecordNote,
   RowRecord,
   RowValues,
   SessionUser,
@@ -30,6 +32,8 @@ export interface RecordsPage {
   hasMore: boolean;
   /** 当前访问者已经改过一次的格子（`记录 id:字段 id`）；所有者恒为空 */
   lockedCells: string[];
+  /** 这一页记录上的备注（备注只增不改，可以直接合并进本地列表） */
+  notes: RecordNote[];
 }
 
 export interface UploadResult {
@@ -151,6 +155,16 @@ export const api = {
   updateRecord: (id: string, body: { values?: RowValues; position?: number }) =>
     json<{ record: RowRecord | null; total: number }>(`/api/records/${id}`, 'PATCH', body),
   deleteRecord: (id: string) => json<{ ok: true; total: number }>(`/api/records/${id}`, 'DELETE'),
+
+  /** 添加备注（备注只能新增，不能修改 / 删除） */
+  addNote: (recordId: string, body: { body: string; mentions?: string[] }) =>
+    json<{ notes: RecordNote[] }>(`/api/records/${recordId}/notes`, 'POST', body),
+
+  /** 收件箱：别人在备注里 @ 我留下的私信（未读） */
+  inbox: (signal?: AbortSignal) => json<InboxResponse>('/api/inbox', 'GET', undefined, signal),
+  /** 点开一条私信 → 已读（未读数 -1） */
+  readInboxMessage: (mentionId: string) =>
+    json<{ unread: number }>(`/api/inbox/${encodeURIComponent(mentionId)}/read`, 'POST'),
 
   createView: (
     databaseId: string,

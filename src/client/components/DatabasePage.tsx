@@ -11,6 +11,7 @@ import type {
   FileValue,
   Property,
   PropertyConfig,
+  RecordNote,
   Role,
   RowRecord,
   SessionUser,
@@ -32,6 +33,8 @@ import { TableGrid } from './TableGrid';
 import { ViewBar, type NewViewInput } from './ViewBar';
 
 const PAGE_SIZE = 100;
+/** 从私信跳转时，记录不一定落在第一页：最多把整表拉回来这么多条（服务端上限） */
+const MAX_FETCH = 1000;
 
 export type ToastFn = (message: string, kind?: 'info' | 'error') => void;
 
@@ -43,13 +46,27 @@ interface DatabasePageProps {
   onToast: ToastFn;
   /** refresh the sidebar after renames / deletes */
   onReloadList: () => void;
+  /**
+   * 从收件箱点开私信时带过来的位置：打开这条记录卡片并定位到那条备注。
+   * 由本组件消费后调用 `onInboxTargetHandled` 清空（避免重复打开）。
+   */
+  inboxTarget?: { recordId: string; noteId: string } | null;
+  onInboxTargetHandled: () => void;
   /** called after the database itself was deleted */
   onClose: () => void;
 }
 
 type PropertyDialogState = { mode: 'create'; afterId: string | null } | { mode: 'edit'; property: Property } | null;
 
-export function DatabasePage({ database, me, onToast, onReloadList, onClose }: DatabasePageProps) {
+export function DatabasePage({
+  database,
+  me,
+  onToast,
+  onReloadList,
+  inboxTarget,
+  onInboxTargetHandled,
+  onClose,
+}: DatabasePageProps) {
   const [detail, setDetail] = useState<DatabaseDetail>(database);
   const [rows, setRows] = useState<RowRecord[]>(database.rows);
   const [total, setTotal] = useState(database.total);
@@ -57,6 +74,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const [activeViewId, setActiveViewId] = useState<string | null>(database.views[0]?.id ?? null);
   const [propertyDialog, setPropertyDialog] = useState<PropertyDialogState>(null);
   const [openRowId, setOpenRowId] = useState<string | null>(null);
+  /** 从私信点进来时要定位（滚动 + 高亮）的备注 id */
+  const [focusNoteId, setFocusNoteId] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareViewId, setShareViewId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState(database.name);
@@ -156,6 +175,88 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     });
   }, []);
 
+  /* --------------------------------------------------------------- notes */
+
+  /** 备注里可以 @ 的人：表格成员去掉自己（自己不需要给自己发私信） */
+  const mentionCandidates = useMemo(
+    () => members.filter((member) => member.userId !== me?.id),
+    [members, me],
+  );
+
+  /** 把服务端返回的备注并进本地状态（服务端返回的是按记录分组的完整备注列表） */
+  const mergeNotes = useCallback((incoming: RecordNote[]) => {
+    if (!incoming.length) return;
+    setDetail((prev) => {
+      const byRecord = new Map<string, RecordNote[]>();
+      for (const note of incoming) {
+        const list = byRecord.get(note.recordId) ?? [];
+        list.push(note);
+        byRecord.set(note.recordId, list);
+      }
+      return {
+        ...prev,
+        notes: [...prev.notes.filter((note) => !byRecord.has(note.recordId)), ...incoming],
+      };
+    });
+  }, []);
+
+  /** 添加备注（只能新增，不能修改 / 删除）；@ 到的人会收到私信 */
+  const addNote = async (row: RowRecord, body: string, mentions: string[]) => {
+    try {
+      const result = await api.addNote(row.id, { body, mentions });
+      mergeNotes(result.notes);
+      const names = members.filter((member) => mentions.includes(member.userId)).map((member) => member.name);
+      onToast(names.length ? `备注已添加，已提醒 ${names.join('、')}` : '备注已添加');
+    } catch (cause) {
+      fail(cause, '备注添加失败');
+      // 抛回输入框：保留草稿并把错误显示在输入框旁边
+      throw cause;
+    }
+  };
+
+  /**
+   * 收件箱私信：打开对应的记录卡片，并定位到那条备注。
+   * 记录不一定在当前这一页（例如从别的表格点进来），那时先把表格整页拉回来。
+   */
+  useEffect(() => {
+    if (!inboxTarget) return;
+    const { recordId, noteId } = inboxTarget;
+    const locate = () => {
+      setOpenRowId(recordId);
+      setFocusNoteId(noteId);
+      onInboxTargetHandled();
+    };
+    if (rows.some((row) => row.id === recordId)) {
+      locate();
+      return;
+    }
+
+    let cancelled = false;
+    api
+      .getDatabase(detail.id, { limit: MAX_FETCH })
+      .then((next) => {
+        if (cancelled) return;
+        setDetail(next);
+        setRows(next.rows);
+        setTotal(next.total);
+        setHasMore(next.hasMore);
+        mergeLockedCells(next.lockedCells);
+        if (next.rows.some((row) => row.id === recordId)) setOpenRowId(recordId);
+        else onToast('这条私信对应的记录已被删除', 'error');
+        setFocusNoteId(noteId);
+        onInboxTargetHandled();
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        fail(cause, '打开私信对应的记录失败');
+        onInboxTargetHandled();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inboxTarget, rows, detail.id, fail, mergeLockedCells, onInboxTargetHandled, onToast]);
+
+
   /* ------------------------------------------------------------------- rows */
 
   const loadMore = async () => {
@@ -167,6 +268,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       setTotal(page.total);
       setHasMore(page.hasMore);
       mergeLockedCells(page.lockedCells);
+      mergeNotes(page.notes);
     } catch (cause) {
       fail(cause, '加载更多失败');
     } finally {
@@ -702,11 +804,16 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
           row={openRow}
           users={users}
           canEdit={canEdit}
-          onClose={() => setOpenRowId(null)}
+          notes={detail.notes.filter((note) => note.recordId === openRow.id)}
+          mentionCandidates={mentionCandidates}
+          focusNoteId={focusNoteId}
+          onClose={() => {
+            setOpenRowId(null);
+            setFocusNoteId(null);
+          }}
           onCommitCell={(property, value) => void commitCell(openRow, property, value)}
           uploadFile={(property, file) => uploadFile(openRow, property, file)}
-          onDuplicate={() => void duplicateRows([openRow])}
-          onDelete={() => void deleteRows([openRow])}
+          onAddNote={(body, mentions) => addNote(openRow, body, mentions)}
           lockedCells={lockedCells}
         />
       ) : null}

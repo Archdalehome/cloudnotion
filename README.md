@@ -21,6 +21,7 @@
 | 锁定 | 三层只读控制：**表格锁定**（隐藏表头 `▾` 菜单与 `＋字段` 列、表头不可点开修改窗口，字段与视图结构只读）、**视图锁定**（名称 / 筛选 / 可见字段不可改，不可删除）、**字段锁定**（表头 `▾` 菜单里锁定，该字段所有记录只能查看，编辑与附件上传都会被服务端拒绝） |
 | 分享 | **视图定向分享**：把单个视图（含它的筛选与可见字段）分享给已注册账号，打开面板的入口是视图工具栏的「分享」；公开链接 `/share/:token`（只读 / 可编辑、可设 7/30/90 天过期，写操作走 `/api/public/*`）接口保留，界面已移除生成入口 |
 | 附件 | 上传到 R2（默认上限 25MB，`MAX_UPLOAD_MB` 可调），元数据存 `files` 表 |
+| 备注 | 记录卡片底部的备注**只增不改**（后端不提供修改 / 删除备注的接口，输入框旁也有提示）；输入 `@` 可提醒表格里的协作者，被 @ 的人会在左上角收件箱（📥 + 红点数字）收到一条私信，点开即已读并跳到那条备注（高亮定位）；@ 不到自己与表格外的人，单条备注最多 50 人 |
 
 ## 目录结构
 
@@ -33,18 +34,22 @@ src/
     auth.ts    Cookie 会话、密码哈希、requireUser
     access.ts  表格访问级别判定（view/edit/manage）
     mappers.ts D1 行 -> API 类型
-    routes/    auth / databases / properties / records / views / public / files
+    routes/    auth / databases / properties / records / views / public / files / notes
   client/     React SPA
     App.tsx            会话 + 表格列表 + `/share/:token` 路由
     api.ts             fetch 封装（cookie、ApiError、typed 响应）
     components/        AuthPage Sidebar DatabasePage PublicPage TableGrid CardViews
                        Cell RecordDialog PropertyDialog ViewBar SharePanel Modal Popover
+                       InboxButton UserChip FilterPanel
     lib/viewEngine.ts  前端筛选/排序/分组计算
+    lib/time.ts        相对时间 / 精确时间的格式化
 scripts/
   check-routes.mjs  路由静态检查（重复/处理器缺失/公开端点）
-  smoke-test.mjs    端到端冒烟测试（45 项断言，失败时退出码 1）
+  smoke-test.mjs    端到端冒烟测试（失败时退出码 1）
 migrations/
   0001_init.sql     D1 初始化迁移
+  ...               0002-0005：视图定向分享 / 字段锁定 / 分享限制编辑等增量迁移
+  0006_notes.sql    记录备注（notes）+ @提醒私信（note_mentions）
 ```
 
 ## 快速开始
@@ -61,7 +66,7 @@ npm run dev
 
 - `npm run dev:web`：只跑 Vite 前端（`/api` 需代理到 Worker，见 `vite.config.ts`）
 - `npm run typecheck`：`tsconfig.client.json` + `tsconfig.worker.json` 全量类型检查
-- `npm run check:routes`：路由自检（当前 35 条路由）
+- `npm run check:routes`：路由自检（当前 40 条路由）
 - `npm run test:e2e`：对运行中的 Worker 跑端到端冒烟测试
 
 ```bash
@@ -70,7 +75,7 @@ node scripts/smoke-test.mjs
 BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 ```
 
-冒烟测试覆盖：健康检查 → 注册/会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删 → 分享链接（只读拒写、可编辑可写）→ 成员邀请/改权/移除/所有者保护 → R2 上传下载 → 清理。
+冒烟测试覆盖：健康检查 → 注册/会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删 → 分享链接（只读拒写、可编辑可写）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读）→ R2 上传下载 → 清理。
 
 ## 数据模型
 
@@ -82,6 +87,8 @@ BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 - `views`：视图（`type` + `config` JSON：filters/sorts/groupBy/visibleProperties/rowHeight/cardSize…）
 - `shares`：公开分享链接（`token` 唯一、`permission`、`expires_at`）
 - `files`：R2 对象元数据（`r2_key`、名称、大小、MIME）
+- `notes`：记录备注（评论），**只增不改**（没有 update / delete 语句与接口）
+- `note_mentions`：备注里 @ 到的人 → 收件箱私信；`read_at` 为 NULL 表示未读（就是红点里的数字）
 
 ## API 一览
 
@@ -100,6 +107,9 @@ POST   /api/databases/:id/views
 PATCH|DELETE /api/views/:id
 PATCH|DELETE /api/properties/:id
 PATCH|DELETE /api/records/:id
+POST   /api/records/:id/notes              （备注只增不改：没有修改 / 删除接口）
+GET    /api/inbox                          （未读私信列表 + 红点数字）
+POST   /api/inbox/:id/read                 （点开一条私信 → 已读）
 PATCH|DELETE /api/members/:id
 DELETE /api/shares/:id
 POST   /api/files   GET|DELETE /api/files/:id

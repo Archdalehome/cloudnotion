@@ -10,8 +10,8 @@
  *
  * It registers a throw-away account and walks the critical path: session ->
  * create table -> add field -> records (create/update/duplicate/delete) ->
- * views -> share links -> public read + edit -> members -> file upload ->
- * cleanup. Exit code is 1 when any check fails.
+ * views -> share links -> public read + edit -> members -> notes + @mention
+ * inbox -> file upload -> cleanup. Exit code is 1 when any check fails.
  */
 const BASE = (process.env.BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const PASSWORD = process.env.SMOKE_PASSWORD ?? 'Smoke1test';
@@ -653,6 +653,114 @@ async function main() {
     const ownerEdit = await call(`/api/members/${ownerEntry.id}`, { method: 'PATCH', body: { role: 'editor' } });
     check('owner role cannot be changed', ownerEdit.status === 400, `status=${ownerEdit.status}`);
   }
+
+  // ------------------------------------------------ notes + @提醒私信（收件箱）
+  section('notes + inbox');
+  const notesMemberId = collaborator.data?.user?.id;
+  const notesOwnerCookie = cookie;
+
+  const anonNote = await call(`/api/records/${firstId}/notes`, {
+    cookie: false,
+    method: 'POST',
+    body: { body: '匿名备注' },
+  });
+  check('anonymous visitors cannot add notes', anonNote.status === 401, `status=${anonNote.status}`);
+
+  const mentioned = await call(`/api/records/${firstId}/notes`, {
+    method: 'POST',
+    body: { body: '这行数据请你确认一下 @Smoke Collaborator', mentions: [notesMemberId] },
+  });
+  const mentionedNote = (mentioned.data?.notes ?? []).find((note) => note.body.includes('@Smoke Collaborator'));
+  check(
+    'add a note with an @mention',
+    mentioned.status === 201 &&
+      mentionedNote?.authorName === 'Smoke Tester' &&
+      mentionedNote?.mentions?.length === 1 &&
+      mentionedNote.mentions[0].userId === notesMemberId,
+    `status=${mentioned.status} notes=${mentioned.data?.notes?.length ?? 0} mentions=${mentionedNote?.mentions?.length ?? 0}`,
+  );
+
+  const selfNote = await call(`/api/records/${firstId}/notes`, {
+    method: 'POST',
+    body: { body: '只给自己看的备注 @Smoke Tester', mentions: [registered.data?.user?.id, 'user-not-here'] },
+  });
+  const selfNotes = selfNote.data?.notes ?? [];
+  const selfNoteRow = selfNotes[selfNotes.length - 1];
+  check(
+    'nobody is messaged for @自己 / @表格外的人',
+    selfNote.status === 201 && (selfNoteRow?.mentions ?? []).length === 0,
+    `mentions=${selfNoteRow?.mentions?.length ?? 0}`,
+  );
+  check('notes come back with the record', selfNotes.length === 2, `notes=${selfNotes.length}`);
+
+  const notesDetail = await call(`/api/databases/${databaseId}`);
+  check(
+    'database detail carries the notes',
+    (notesDetail.data?.notes ?? []).some((note) => note.id === mentionedNote?.id),
+    `notes=${notesDetail.data?.notes?.length ?? 0}`,
+  );
+
+  const notesRows = await call(`/api/databases/${databaseId}/rows?limit=50`);
+  check(
+    'paged rows carry the notes of their records',
+    (notesRows.data?.notes ?? []).some((note) => note.id === mentionedNote?.id),
+    `notes=${notesRows.data?.notes?.length ?? 0}`,
+  );
+
+  // 备注只增不改：没有修改 / 删除备注的接口（路径存在但方法不允许）
+  const editNote = await call(`/api/records/${firstId}/notes`, { method: 'PATCH', body: { body: '改一下' } });
+  const dropNote = await call(`/api/records/${firstId}/notes`, { method: 'DELETE' });
+  check(
+    'notes cannot be edited or deleted',
+    editNote.status === 405 && dropNote.status === 405,
+    `patch=${editNote.status} delete=${dropNote.status}`,
+  );
+
+  const ownerInbox = await call('/api/inbox');
+  check(
+    'the author never messages themselves',
+    ownerInbox.data?.unread === 0 && (ownerInbox.data?.messages ?? []).length === 0,
+    `unread=${ownerInbox.data?.unread ?? 0}`,
+  );
+
+  await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
+  const memberInbox = await call('/api/inbox');
+  const inboxRow = (memberInbox.data?.messages ?? []).find((item) => item.noteId === mentionedNote?.id);
+  const firstTitle = (notesDetail.data?.rows ?? []).find((row) => row.id === firstId)?.values?.[titleProperty.id];
+  check(
+    'the mentioned member gets an inbox message',
+    memberInbox.status === 200 && memberInbox.data?.unread === 1 && Boolean(inboxRow),
+    `unread=${memberInbox.data?.unread ?? 0} messages=${memberInbox.data?.messages?.length ?? 0}`,
+  );
+  check(
+    'the inbox message points back at the record',
+    inboxRow?.databaseId === databaseId &&
+      inboxRow?.recordId === firstId &&
+      inboxRow?.authorName === 'Smoke Tester' &&
+      inboxRow?.recordTitle === firstTitle &&
+      Boolean(inboxRow?.databaseName),
+    `title=${textOf(inboxRow?.recordTitle ?? '')}`,
+  );
+
+  const anonInbox = await call('/api/inbox', { cookie: false });
+  check('the inbox needs a session', anonInbox.status === 401, `status=${anonInbox.status}`);
+
+  const consumed = await call(`/api/inbox/${inboxRow?.id}/read`, { method: 'POST' });
+  check(
+    'opening a message marks it read',
+    consumed.status === 200 && consumed.data?.unread === 0,
+    `unread=${consumed.data?.unread ?? ''}`,
+  );
+  const afterRead = await call('/api/inbox');
+  check(
+    'the inbox is empty once everything is read',
+    afterRead.data?.unread === 0 && (afterRead.data?.messages ?? []).length === 0,
+    `messages=${afterRead.data?.messages?.length ?? 0}`,
+  );
+
+  cookie = notesOwnerCookie;
+  const notMine = await call(`/api/inbox/${inboxRow?.id}/read`, { method: 'POST' });
+  check('another account cannot read my message', notMine.status === 404, `status=${notMine.status}`);
 
   const removedMember = await call(`/api/members/${member?.id}`, { method: 'DELETE' });
   check(

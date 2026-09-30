@@ -222,6 +222,55 @@ export interface ViewShare {
   createdAt: number;
 }
 
+/* ---------------------------------------------------------------- notes */
+
+/** 备注里被 @ 到的人（备注正文里的 `@名字` 与它一一对应）。 */
+export interface NoteMention {
+  userId: string;
+  name: string;
+}
+
+/**
+ * 一条记录备注（评论）。备注只能新增，不能修改 / 删除。
+ */
+export interface RecordNote {
+  id: string;
+  databaseId: string;
+  recordId: string;
+  body: string;
+  authorId: string | null;
+  authorName: string;
+  /** 备注里 @ 到的人；会给每人各发一条私信 */
+  mentions: NoteMention[];
+  createdAt: number;
+}
+
+/**
+ * 收件箱里的一条私信：别人在备注里 @ 了你。
+ * 点开后 `read_at` 被写入，未读数 -1；归零后红点消失。
+ */
+export interface InboxMessage {
+  id: string;
+  noteId: string;
+  databaseId: string;
+  databaseName: string;
+  databaseIcon: string;
+  recordId: string;
+  /** 记录标题（表格第一个文本字段的值），用于在列表里识别记录 */
+  recordTitle: string;
+  authorName: string;
+  /** 备注正文（列表里截断显示） */
+  body: string;
+  createdAt: number;
+}
+
+export interface InboxResponse {
+  /** 未读私信，按时间倒序（点开即从列表里消失） */
+  messages: InboxMessage[];
+  /** 未读私信条数，就是红点里的数字 */
+  unread: number;
+}
+
 /* -------------------------------------------------------------- databases */
 
 export interface DatabaseSummary {
@@ -270,6 +319,11 @@ export interface DatabaseDetail {
    * 表格所有者、表格成员、以及没勾选「限制编辑」的分享拿到的永远是空数组。
    */
   lockedCells: string[];
+  /**
+   * 当前这一页记录上的备注（评论），按 `createdAt` 升序。
+   * 备注只能新增，不能修改 / 删除（服务端没有对应的接口）。
+   */
+  notes: RecordNote[];
   /** 当前访问者是否受「限制编辑」约束（每个格子只能改一次） */
   limitCellEdits: boolean;
   /**

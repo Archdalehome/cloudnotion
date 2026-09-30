@@ -41,6 +41,7 @@ import {
   viewFromRow,
   viewShareFromRow,
 } from '../mappers';
+import { loadNotes } from '../notes';
 import type { Env, RequestContext, Route } from '../types';
 
 const DEFAULT_PAGE_SIZE = 200;
@@ -482,6 +483,11 @@ export async function buildDatabaseDetail(
     memberCellEditKey(access),
     page.rows.map((item) => item.id),
   );
+  // 当前页记录上的备注（只能新增，不能修改 / 删除）
+  const notes = await loadNotes(
+    env,
+    page.rows.map((item) => item.id),
+  );
 
   return {
     id: databaseId,
@@ -504,6 +510,7 @@ export async function buildDatabaseDetail(
     hasMore: offset + page.rows.length < page.total,
     people,
     lockedCells,
+    notes,
     // 分享时勾选的「限制编辑」：前端据此把改过的格子标成只读
     limitCellEdits: access.limitCellEdits,
   };
@@ -576,7 +583,12 @@ async function recordsPageHandler(ctx: RequestContext): Promise<Response> {
     memberCellEditKey(access),
     rows.map((row) => row.id),
   );
-  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells });
+  // 「加载更多」拿到的这一页记录上的备注（备注只增不改，前端可以放心合并）
+  const notes = await loadNotes(
+    ctx.env,
+    rows.map((row) => row.id),
+  );
+  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells, notes });
 }
 
 async function updateHandler(ctx: RequestContext): Promise<Response> {

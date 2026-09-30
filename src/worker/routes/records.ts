@@ -23,6 +23,7 @@ import {
   type SqlRow,
 } from '../http';
 import { recordFromRow } from '../mappers';
+import { loadNotes } from '../notes';
 import { withDefaultStatus } from '../statusDefaults';
 import type { Env, RequestContext, Route } from '../types';
 import { countRecords, loadProperties, loadRecord, loadRecords, touchDatabase } from './databases';
@@ -312,7 +313,12 @@ async function pageHandler(ctx: RequestContext): Promise<Response> {
     memberCellEditKey(access),
     rows.map((row) => row.id),
   );
-  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells });
+  // 这一页记录上的备注（只能新增，不能修改 / 删除）
+  const notes = await loadNotes(
+    ctx.env,
+    rows.map((row) => row.id),
+  );
+  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells, notes });
 }
 
 export const recordRoutes: Route[] = [

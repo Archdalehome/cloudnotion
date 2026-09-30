@@ -1195,6 +1195,189 @@ textarea.input {
   border-top: 1px solid var(--border);
 }
 
+/* 记录卡片底部的备注区：备注只能新增，不能修改 / 删除 */
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.note {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+}
+
+/* 从私信点进来时高亮目标备注 */
+.note.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.note-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.note-author {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.note-body {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 备注正文里的 @提醒 */
+.mention {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: #17509a;
+  font-weight: 600;
+}
+
+.note-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.note-composer textarea.input {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+/* 输入 @ 后弹出的可选人员列表 */
+.mention-list {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.mention-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mention-item:hover,
+.mention-item.active {
+  background: var(--bg-sunken);
+}
+
+.mention-name {
+  font-size: 13px;
+}
+
+
+/* --------------------------------------------------- 备注 + 收件箱私信 */
+
+/* 收件箱（inbox）图标 + 右上角红点：红点里的数字是未读私信条数 */
+.inbox-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.inbox-dot {
+  position: absolute;
+  top: -7px;
+  right: -10px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.inbox-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inbox-item:hover {
+  background: var(--bg-sunken);
+}
+
+.inbox-item-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inbox-item-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-item-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+
 /* ------------------------------------------------------------ toasts */
 
 .toasts {

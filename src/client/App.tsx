@@ -3,10 +3,11 @@
  * database page) and the public share route (`/share/:token`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DatabaseDetail, DatabaseSummary, SessionUser } from '../shared/types';
+import type { DatabaseDetail, DatabaseSummary, InboxMessage, InboxResponse, SessionUser } from '../shared/types';
 import { ApiError, api, type SessionPayload } from './api';
 import { AuthPage } from './components/AuthPage';
 import { DatabasePage } from './components/DatabasePage';
+import { InboxButton } from './components/InboxButton';
 import { PublicPage } from './components/PublicPage';
 import { Sidebar } from './components/Sidebar';
 import { UserChip } from './components/UserChip';
@@ -15,6 +16,17 @@ interface ToastItem {
   id: number;
   message: string;
   kind: 'info' | 'error';
+}
+
+/** 私信（@提醒）的轮询间隔：改备注的人不少，60 秒足够及时又不费流量 */
+const INBOX_POLL_MS = 60_000;
+const EMPTY_INBOX: InboxResponse = { messages: [], unread: 0 };
+
+/** 点开私信后要打开的位置：某张表格的某条记录里的某条备注 */
+interface InboxTarget {
+  databaseId: string;
+  recordId: string;
+  noteId: string;
 }
 
 /** 侧边栏展开状态在本地记住（下次打开保持上次的选择） */
@@ -78,6 +90,10 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
   const [narrow, setNarrow] = useState(isNarrowViewport);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  /** 收件箱：别人在备注里 @ 我的未读私信（红点里的数字就是 messages 的条数） */
+  const [inbox, setInbox] = useState<InboxResponse>(EMPTY_INBOX);
+  /** 点开私信后要打开的记录 / 备注；由 DatabasePage 消费后清空 */
+  const [inboxTarget, setInboxTarget] = useState<InboxTarget | null>(null);
 
   const toast = useCallback((message: string, kind: 'info' | 'error' = 'info') => {
     const id = Date.now() + Math.random();
@@ -188,6 +204,58 @@ export function App() {
     };
   }, [activeId, toast, detailReloadKey]);
 
+  /* ------------------------------------------------------------- 收件箱 */
+
+  const refreshInbox = useCallback(async () => {
+    if (!user) return;
+    try {
+      setInbox(await api.inbox());
+    } catch {
+      // 未登录 / 网络抖动时保持现状，下一轮轮询会再试
+    }
+  }, [user]);
+
+  // 登录后立刻拉一次，之后轮询；切回标签页时也顺手刷新一次
+  useEffect(() => {
+    if (!user) {
+      setInbox(EMPTY_INBOX);
+      return;
+    }
+    void refreshInbox();
+    const timer = window.setInterval(() => void refreshInbox(), INBOX_POLL_MS);
+    const onFocus = () => void refreshInbox();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [user, refreshInbox]);
+
+  /**
+   * 点开一条私信：本地先把红点数字 -1（服务端同时标记已读），
+   * 再打开这条私信对应的记录卡片，并定位到那条备注。
+   */
+  const openInboxMessage = useCallback(
+    async (message: InboxMessage) => {
+      setInbox((prev) => ({
+        unread: Math.max(0, prev.unread - 1),
+        messages: prev.messages.filter((item) => item.id !== message.id),
+      }));
+      try {
+        const result = await api.readInboxMessage(message.id);
+        setInbox((prev) => ({ ...prev, unread: result.unread }));
+      } catch {
+        // 标记已读失败也照样打开（下一轮轮询会把未读数同步回来）
+      }
+      setInboxTarget({ databaseId: message.databaseId, recordId: message.recordId, noteId: message.noteId });
+      setActiveId(message.databaseId);
+      // 手机上先收起抽屉，露出刚打开的记录卡片
+      if (narrow) setSidebar(false);
+    },
+    [narrow, setSidebar],
+  );
+
+  const clearInboxTarget = useCallback(() => setInboxTarget(null), []);
 
   const refreshList = useCallback(async () => {
     try {
@@ -221,6 +289,8 @@ export function App() {
     setActiveId(null);
     setDetail(null);
     setDetailError('');
+    setInbox(EMPTY_INBOX);
+    setInboxTarget(null);
   }, []);
 
   const reauthenticate = useCallback(
@@ -258,6 +328,8 @@ export function App() {
         user={user}
         databases={databases}
         activeId={activeId}
+        inbox={inbox.messages}
+        inboxUnread={inbox.unread}
         open={sidebarOpen}
         narrow={narrow}
         onSelect={(id) => {
@@ -268,6 +340,8 @@ export function App() {
         onCreate={createDatabase}
         onClose={() => setSidebar(false)}
         onLogout={() => void logout()}
+        onInboxRefresh={() => void refreshInbox()}
+        onInboxSelect={(message) => void openInboxMessage(message)}
       />
 
       {narrow && sidebarOpen ? (
@@ -288,6 +362,15 @@ export function App() {
               {sidebarOpen ? '«' : '☰'}
             </button>
             <span className="brand">{appName}</span>
+            {/* 侧边栏收起时，收件箱标志挪到顶部条（看不到侧边栏左上角的那个） */}
+            {!sidebarOpen ? (
+              <InboxButton
+                messages={inbox.messages}
+                unread={inbox.unread}
+                onRefresh={() => void refreshInbox()}
+                onSelect={(message) => void openInboxMessage(message)}
+              />
+            ) : null}
             {narrow && detail ? <span className="muted small db-hint">{detail.name}</span> : null}
             <span className="spacer" />
             {/* 侧边栏收起时侧边栏底部看不见了，把「用户名 · 邮箱 · 退出」挪到右上角 */}
@@ -306,6 +389,12 @@ export function App() {
             me={user}
             onToast={toast}
             onReloadList={() => void refreshList()}
+            inboxTarget={
+              inboxTarget && inboxTarget.databaseId === detail.id
+                ? { recordId: inboxTarget.recordId, noteId: inboxTarget.noteId }
+                : null
+            }
+            onInboxTargetHandled={clearInboxTarget}
             onClose={() => {
               setActiveId(null);
               setDetail(null);
