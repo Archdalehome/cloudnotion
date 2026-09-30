@@ -322,7 +322,7 @@ export function ViewBar({
         </button>
       ))}
 
-      <Popover label="＋" title="新建视图" wide disabled={!canEdit}>
+      <Popover label="＋" title="新建视图" panelWidth={560} disabled={!canEdit}>
         {(close) => (
           <NewViewForm
             properties={properties}

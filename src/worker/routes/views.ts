@@ -61,6 +61,9 @@ export function sanitizeViewConfig(
       propertyId: String(rule.propertyId),
       operator: (OPERATORS as readonly string[]).includes(rule.operator) ? rule.operator : 'contains',
       value: rule.value ?? null,
+      // 这条条件自己的「必须满足（and）/ 任意满足（or）」；没写就不落库，
+      // 求值时退回视图级 conjunction（老数据兼容，见 shared/viewFilter.ts）
+      conjunction: rule.conjunction === 'or' ? ('or' as const) : rule.conjunction === 'and' ? ('and' as const) : undefined,
     }));
 
   const sorts = (Array.isArray(source.sorts) ? source.sorts : base.sorts)

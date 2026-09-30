@@ -6,6 +6,8 @@ interface PopoverProps {
   label: React.ReactNode;
   title?: string;
   wide?: boolean;
+  /** 面板宽度（px）；默认 320，`wide` 时 420。超出视口时会自动收窄（窄屏不溢出） */
+  panelWidth?: number;
   disabled?: boolean;
   /** trigger style (defaults to a ghost button) */
   variant?: 'ghost' | 'primary';
@@ -21,6 +23,7 @@ interface PanelPosition {
   top?: number;
   bottom?: number;
   left: number;
+  width: number;
   maxHeight: number;
 }
 
@@ -41,6 +44,7 @@ export function Popover({
   label,
   title,
   wide,
+  panelWidth,
   disabled,
   variant = 'ghost',
   align = 'right',
@@ -57,7 +61,9 @@ export function Popover({
   const place = useCallback(() => {
     const rect = trigger.current?.getBoundingClientRect();
     if (!rect) return;
-    const width = wide ? PANEL_WIDTH.wide : PANEL_WIDTH.normal;
+    const wanted = panelWidth ?? (wide ? PANEL_WIDTH.wide : PANEL_WIDTH.normal);
+    // 视口太窄时收窄面板（窄屏 390px 也放得下），left 用实际宽度来夹取
+    const width = Math.min(wanted, Math.max(PANEL_WIDTH.normal, window.innerWidth - MARGIN * 2));
     const maxLeft = Math.max(MARGIN, window.innerWidth - width - MARGIN);
     const left = Math.min(Math.max(MARGIN, align === 'left' ? rect.left : rect.right - width), maxLeft);
     const below = window.innerHeight - rect.bottom - GAP - MARGIN;
@@ -66,12 +72,13 @@ export function Popover({
       setPosition({
         bottom: Math.max(MARGIN, window.innerHeight - rect.top + GAP),
         left,
+        width,
         maxHeight: Math.max(MIN_HEIGHT, above),
       });
     } else {
-      setPosition({ top: rect.bottom + GAP, left, maxHeight: Math.max(MIN_HEIGHT, below) });
+      setPosition({ top: rect.bottom + GAP, left, width, maxHeight: Math.max(MIN_HEIGHT, below) });
     }
-  }, [align, wide]);
+  }, [align, wide, panelWidth]);
 
   useLayoutEffect(() => {
     if (!open) {
@@ -131,6 +138,7 @@ export function Popover({
                 bottom: position?.bottom ?? 'auto',
                 left: position?.left ?? 0,
                 right: 'auto',
+                width: position?.width,
                 maxHeight: position ? position.maxHeight : undefined,
                 visibility: position ? 'visible' : 'hidden',
               }}

@@ -25,6 +25,9 @@ export interface FilterContext {
   viewerId?: string | null;
 }
 
+/** 条件之间的关系：`and` = 必须满足（且），`or` = 任意满足（或）。 */
+export type Conjunction = 'and' | 'or';
+
 export function dateishProperty(property: Property): boolean {
   return property.type === 'date' || property.type === 'created_time' || property.type === 'updated_time';
 }
@@ -169,7 +172,24 @@ export function matchesCondition(
   }
 }
 
-/** Apply the view's conditions (all / any) to a list of rows. */
+/**
+ * 一条条件与前一条结果的关系。条件自己没写 `conjunction` 时退回视图级关系
+ * （老视图 / 老接口的数据兼容）。
+ */
+export function conditionConjunction(condition: FilterCondition, fallback: Conjunction = 'and'): Conjunction {
+  if (condition.conjunction === 'or') return 'or';
+  if (condition.conjunction === 'and') return 'and';
+  return fallback;
+}
+
+/**
+ * Apply the view's conditions to a list of rows.
+ *
+ * 逐条从左到右折叠：第一条条件决定起点，之后每条条件按自己的关系合并结果——
+ * 「必须满足」（且）与已有结果取交集，「任意满足」（或）取并集。所以
+ * `A 必须满足 B 任意满足 C` = `(A 且 B) 或 C`，每条条件都能单独选，不必整个
+ * 视图统一成 and / or。
+ */
 export function filterRows(
   properties: Property[],
   rows: RowRecord[],
@@ -179,14 +199,18 @@ export function filterRows(
   const conditions = config.filters?.conditions ?? [];
   if (!conditions.length) return rows;
   const byId = new Map(properties.map((property) => [property.id, property]));
-  const conjunction = config.filters?.conjunction === 'or' ? 'or' : 'and';
+  const fallback: Conjunction = config.filters?.conjunction === 'or' ? 'or' : 'and';
 
   return rows.filter((row) => {
-    const results = conditions.map((condition) => {
+    let result: boolean | null = null;
+    for (const condition of conditions) {
       const property = byId.get(condition.propertyId);
-      return property ? matchesCondition(property, condition, row, ctx) : true;
-    });
-    return conjunction === 'or' ? results.some(Boolean) : results.every(Boolean);
+      const value = property ? matchesCondition(property, condition, row, ctx) : true;
+      if (result === null) result = value;
+      else if (conditionConjunction(condition, fallback) === 'or') result = result || value;
+      else result = result && value;
+    }
+    return result ?? true;
   });
 }
 

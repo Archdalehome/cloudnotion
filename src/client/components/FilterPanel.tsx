@@ -14,6 +14,7 @@ import {
   operatorsNeedValue,
 } from '../../shared/fields';
 import type { FilterCondition, FilterOperator, Filters, Property } from '../../shared/types';
+import { conditionConjunction } from '../../shared/viewFilter';
 
 /** userId -> 显示名（用于「创建人」等人员类筛选） */
 export type FilterUserNames = Record<string, string>;
@@ -118,8 +119,8 @@ export function FilterPanel({
   const conditions = filters?.conditions ?? [];
   const propertyOf = (id: string) => properties.find((item) => item.id === id);
 
-  const emit = (next: FilterCondition[], nextConjunction: Filters['conjunction'] = conjunction) =>
-    onChange({ conjunction: nextConjunction, conditions: next });
+  /** 视图级关系（`conjunction`）保留下来只作为老数据的缺省值，界面不再整体切换 */
+  const emit = (next: FilterCondition[]) => onChange({ conjunction, conditions: next });
 
   const patch = (id: string, changes: Partial<FilterCondition>) =>
     emit(conditions.map((condition) => (condition.id === id ? { ...condition, ...changes } : condition)));
@@ -127,32 +128,49 @@ export function FilterPanel({
   const add = () => {
     const property = properties[0];
     if (!property) return;
-    emit([...conditions, newCondition(property)]);
+    // 新条件沿用上一条的关系（第一条没有前一条，用「必须满足」）
+    const previous = conditions[conditions.length - 1];
+    const relation = previous ? conditionConjunction(previous, conjunction) : 'and';
+    emit([...conditions, { ...newCondition(property), conjunction: relation }]);
   };
 
   const remove = (id: string) => emit(conditions.filter((condition) => condition.id !== id));
 
   return (
-    <div>
-      <div className="row gap" style={{ marginBottom: 8 }}>
+    <div className="filter-panel">
+      <div className="filter-head">
         <span className="small muted">{header}</span>
-        <select
-          className="input"
-          style={{ width: 96 }}
-          value={conjunction}
-          disabled={!canEdit}
-          onChange={(event) => emit(conditions, event.target.value === 'or' ? 'or' : 'and')}
-        >
-          <option value="and">全部满足</option>
-          <option value="or">任意满足</option>
-        </select>
+        {conditions.length > 1 ? (
+          <span className="small muted">
+            每条条件可单独选「必须满足」（且）或「任意满足」（或），按顺序从左到右组合
+          </span>
+        ) : null}
       </div>
 
-      {conditions.map((condition) => {
+      {conditions.map((condition, index) => {
         const property = propertyOf(condition.propertyId) ?? properties[0];
         if (!property) return null;
         return (
           <div className="filter-row" key={condition.id}>
+            {index === 0 ? (
+              // 第一条条件决定筛选的起点，没有「与前一条的关系」
+              <span className="filter-link placeholder" title="第一条条件：筛选从这里开始">
+                首条
+              </span>
+            ) : (
+              <select
+                className="input filter-link"
+                value={conditionConjunction(condition, conjunction)}
+                disabled={!canEdit}
+                title="这条条件与前一条结果的关系：必须满足（且）/ 任意满足（或）"
+                onChange={(event) =>
+                  patch(condition.id, { conjunction: event.target.value === 'or' ? 'or' : 'and' })
+                }
+              >
+                <option value="and">必须满足</option>
+                <option value="or">任意满足</option>
+              </select>
+            )}
             <select
               className="input"
               value={property.id}

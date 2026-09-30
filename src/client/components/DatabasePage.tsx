@@ -20,6 +20,7 @@ import type {
   ViewShare,
 } from '../../shared/types';
 import { defaultViewConfig } from '../../shared/views';
+import { conditionConjunction, type Conjunction } from '../../shared/viewFilter';
 import { ApiError, api } from '../api';
 import { applyView, groupRows, visibleProperties } from '../lib/viewEngine';
 import { BoardView, GalleryView } from './CardViews';
@@ -128,6 +129,25 @@ export function DatabasePage({
   /** 当前视图可改名 / 改配置 / 删除 */
   const viewEditable = canEditStructure && !!activeView && !activeView.locked;
   const filterCount = activeView?.config.filters?.conditions.length ?? 0;
+  /**
+   * 「＋ 新建筛选」后面的汇总文案：几个条件、其中几个「必须满足 / 任意满足」。
+   * 每条条件的关系可以不同，所以这里分别计数（第一条是起点，不参与计数）。
+   */
+  const filterSummary = useMemo(() => {
+    const filters = activeView?.config.filters;
+    const conditions = filters?.conditions ?? [];
+    if (!conditions.length) return '';
+    const fallback: Conjunction = filters?.conjunction === 'or' ? 'or' : 'and';
+    let andCount = 0;
+    let orCount = 0;
+    conditions.forEach((condition, index) => {
+      if (index === 0) return;
+      if (conditionConjunction(condition, fallback) === 'or') orCount += 1;
+      else andCount += 1;
+    });
+    const parts = [andCount ? `必须满足 ${andCount}` : '', orCount ? `任意满足 ${orCount}` : ''].filter(Boolean);
+    return parts.length ? `${conditions.length} 个条件（${parts.join(' + ')}）` : `${conditions.length} 个条件`;
+  }, [activeView]);
   const shownProperties = activeView ? visibleProperties(properties, activeView.config) : properties;
   /** 筛选上下文：把「当前用户」解析为登录用户 */
   const filterContext = useMemo(() => ({ viewerId: me?.id ?? null }), [me]);
@@ -471,12 +491,16 @@ export function DatabasePage({
 
   const addFilterFor = (property: Property) => {
     if (!activeView || !viewEditable) return;
-    const conditions = activeView.config.filters?.conditions ?? [];
+    const filters = activeView.config.filters;
+    const conditions = filters?.conditions ?? [];
+    const fallback: Conjunction = filters?.conjunction === 'or' ? 'or' : 'and';
+    // 新条件沿用上一条的关系（第一条没有前一条，用「必须满足」）
+    const previous = conditions[conditions.length - 1];
     void patchView(activeView.id, {
       config: {
         ...activeView.config,
         filters: {
-          conjunction: activeView.config.filters?.conjunction ?? 'and',
+          conjunction: fallback,
           conditions: [
             ...conditions,
             {
@@ -485,6 +509,7 @@ export function DatabasePage({
               operator: defaultOperatorForType(property.type),
               // 人员类字段默认「当前用户」，加完就能看到自己创建的记录
               value: defaultFilterValueForType(property.type),
+              conjunction: previous ? conditionConjunction(previous, fallback) : 'and',
             },
           ],
         },
@@ -701,9 +726,9 @@ export function DatabasePage({
           <div className="view-toolbar">
             <Popover
               label="＋ 新建筛选"
-              title={viewEditable ? '为该视图添加筛选条件（可多条件组合）' : '当前视图不可修改筛选条件'}
+              title={viewEditable ? '为该视图添加筛选条件（每条条件可选必须满足 / 任意满足）' : '当前视图不可修改筛选条件'}
               variant="primary"
-              wide
+              panelWidth={560}
               align="left"
               disabled={!viewEditable}
             >
@@ -718,9 +743,7 @@ export function DatabasePage({
               )}
             </Popover>
             {filterCount ? (
-              <span className="small muted">
-                {`${activeView.config.filters?.conjunction === 'or' ? '任意满足' : '全部满足'} ${filterCount} 个条件 · 命中 ${filtered.length} 条`}
-              </span>
+              <span className="small muted">{`${filterSummary} · 命中 ${filtered.length} 条`}</span>
             ) : null}
             {/* 勾选记录后的批量操作栏：跟在「＋ 新建筛选」后面（原来在表格上方） */}
             {selectedRows.length ? (

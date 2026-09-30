@@ -293,10 +293,11 @@ async function main() {
 
   const patchedView = await call(`/api/views/${baseView.id}`, {
     method: 'PATCH',
-    body: { config: { filters: { conjunction: 'and', conditions: [{ propertyId: titleProperty.id, operator: 'contains', value: '第一条' }] } } },
+    body: { config: { filters: { conjunction: 'and', conditions: [{ propertyId: titleProperty.id, operator: 'contains', value: '第一条', conjunction: 'or' }] } } },
   });
   const savedConditions = patchedView.data?.views?.find((view) => view.id === baseView.id)?.config?.filters?.conditions ?? [];
   check('save view filters', savedConditions.length === 1, JSON.stringify(savedConditions[0] ?? {}));
+  check('save per-condition conjunction', savedConditions[0]?.conjunction === 'or', JSON.stringify(savedConditions[0] ?? {}));
 
   // a view created from the "＋ 新建视图" form carries name + multi conditions + lock
   const lockedView = await call(`/api/databases/${databaseId}/views`, {
@@ -309,7 +310,7 @@ async function main() {
           conjunction: 'or',
           conditions: [
             { propertyId: titleProperty.id, operator: 'contains', value: '第一' },
-            { propertyId: titleProperty.id, operator: 'is_not_empty' },
+            { propertyId: titleProperty.id, operator: 'is_not_empty', conjunction: 'or' },
           ],
         },
       },
@@ -324,6 +325,7 @@ async function main() {
       lockedRow?.name === '锁定视图' &&
       lockedRow?.locked === true &&
       lockedRow?.config?.filters?.conjunction === 'or' &&
+      lockedRow?.config?.filters?.conditions?.[1]?.conjunction === 'or' &&
       (lockedRow?.config?.filters?.conditions ?? []).length === 2,
     `status=${lockedView.status} locked=${lockedRow?.locked} conditions=${lockedRow?.config?.filters?.conditions?.length ?? 0}`,
   );
