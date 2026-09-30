@@ -77,6 +77,8 @@ export function shareFromRow(row: SqlRow): Share {
     databaseId: sqlString(row, 'database_id'),
     token: sqlString(row, 'token'),
     permission: sqlString(row, 'permission', 'view') === 'edit' ? 'edit' : 'view',
+    // 创建链接时勾选的「限制编辑」：访客每个格子只有一次修改机会
+    limitEdits: sqlNumber(row, 'limit_edits') === 1,
     createdAt: sqlNumber(row, 'created_at'),
     expiresAt: row.expires_at === null || row.expires_at === undefined ? null : sqlNumber(row, 'expires_at'),
   };
@@ -116,6 +118,8 @@ export function viewShareFromRow(row: SqlRow): ViewShare {
     email: sqlString(row, 'email'),
     name: sqlString(row, 'name'),
     role: sqlString(row, 'role', 'viewer') === 'editor' ? 'editor' : 'viewer',
+    // 分享时勾选的「限制编辑」：被分享者每个格子只有一次修改机会
+    limitEdits: sqlNumber(row, 'limit_edits') === 1,
     createdAt: sqlNumber(row, 'created_at'),
   };
 }

@@ -16,6 +16,11 @@ export interface DatabaseAccess {
   locked: boolean;
   /** non-null when the user only sees a set of shared views */
   viewIds: string[] | null;
+  /**
+   * 「限制编辑」：只有分享时勾选了这个开关的访问者，对每个格子才只有一次修改机会。
+   * 表格所有者、表格成员、以及没勾选「限制编辑」的分享都是 false（可以反复修改）。
+   */
+  limitCellEdits: boolean;
 }
 
 /**
@@ -72,7 +77,7 @@ export async function requireDatabaseAccess(
   const locked = sqlNumber(row, 'is_locked') === 1;
 
   if (ownerId === user.id) {
-    return { databaseId, ownerId, userId: user.id, role: 'owner', locked, viewIds: null };
+    return { databaseId, ownerId, userId: user.id, role: 'owner', locked, viewIds: null, limitCellEdits: false };
   }
 
   const member = await env.DB.prepare('SELECT role FROM database_members WHERE database_id = ? AND user_id = ?')
@@ -80,16 +85,20 @@ export async function requireDatabaseAccess(
     .first<SqlRow>();
   const memberRole = member ? sqlString(member, 'role') : '';
   if (memberRole === 'editor' || memberRole === 'viewer') {
-    return { databaseId, ownerId, userId: user.id, role: memberRole, locked, viewIds: null };
+    // 表格成员不受「限制编辑」约束：那是分享链接 / 视图分享上的开关
+    return { databaseId, ownerId, userId: user.id, role: memberRole, locked, viewIds: null, limitCellEdits: false };
   }
 
   // fall back to view level shares: the user may only see the shared views
-  const rows = await env.DB.prepare('SELECT view_id, role FROM view_shares WHERE database_id = ? AND user_id = ?')
+  const rows = await env.DB.prepare('SELECT view_id, role, limit_edits FROM view_shares WHERE database_id = ? AND user_id = ?')
     .bind(databaseId, user.id)
     .all<SqlRow>();
   if (!rows.results?.length) throw forbidden('没有权限访问该表格');
   const role: Role = rows.results.some((item) => sqlString(item, 'role') === 'editor') ? 'editor' : 'viewer';
   if (LEVELS[role] < REQUIRED[level]) throw forbidden('没有权限访问该表格');
+  const editShares = rows.results.filter((item) => sqlString(item, 'role') === 'editor');
+  // 只要有一个可编辑的视图分享没勾选「限制编辑」，这个用户就不受限制
+  const limitCellEdits = editShares.length > 0 && editShares.every((item) => sqlNumber(item, 'limit_edits') === 1);
   return {
     databaseId,
     ownerId,
@@ -97,6 +106,7 @@ export async function requireDatabaseAccess(
     role,
     locked,
     viewIds: rows.results.map((item) => sqlString(item, 'view_id')).filter(Boolean),
+    limitCellEdits,
   };
 }
 
@@ -189,13 +199,15 @@ export interface ShareAccess {
   shareId: string;
   databaseId: string;
   permission: 'view' | 'edit';
+  /** 创建链接时勾选了「限制编辑」：访客对每个格子只有一次修改机会 */
+  limitEdits: boolean;
 }
 
 /** Resolve a public share token (used by the read-only `/share/:token` pages). */
 export async function resolveShareToken(env: Env, token: string): Promise<ShareAccess | null> {
   if (!token) return null;
   const row = await env.DB.prepare(
-    `SELECT s.id, s.database_id, s.permission, s.expires_at, d.is_archived
+    `SELECT s.id, s.database_id, s.permission, s.limit_edits, s.expires_at, d.is_archived
        FROM shares s JOIN databases d ON d.id = s.database_id
       WHERE s.token = ?`,
   )
@@ -205,10 +217,13 @@ export async function resolveShareToken(env: Env, token: string): Promise<ShareA
   if (sqlNumber(row, 'is_archived') === 1) return null;
   const expiresAt = row.expires_at;
   if (expiresAt !== null && expiresAt !== undefined && sqlNumber(row, 'expires_at') < Date.now()) return null;
+  const permission: 'view' | 'edit' = sqlString(row, 'permission', 'view') === 'edit' ? 'edit' : 'view';
   return {
     shareId: sqlString(row, 'id'),
     databaseId: sqlString(row, 'database_id'),
-    permission: sqlString(row, 'permission', 'view') === 'edit' ? 'edit' : 'view',
+    permission,
+    // 只读链接本来就不能改，「限制编辑」只对可编辑链接有意义
+    limitEdits: permission === 'edit' && sqlNumber(row, 'limit_edits') === 1,
   };
 }
 

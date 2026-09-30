@@ -57,11 +57,11 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
   ]);
   // 公开链接也要能显示「创建人 / 最后编辑人」的姓名（表格所有者 + 协作者）
   const people = await loadPeopleNames(ctx.env, rows);
-  // 通过该分享链接已经改过一次的格子（可编辑链接的访客每个格子只有一次机会）
+  // 通过该分享链接已经改过一次的格子（勾选了「限制编辑」的可编辑链接才有）
   const lockedCells = await loadLockedCellKeys(
     ctx.env,
     share.databaseId,
-    shareCellEditKey(share.shareId),
+    shareCellEditKey(share),
     rows.map((item) => item.id),
   );
 
@@ -72,6 +72,8 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
       icon: sqlString(row, 'icon', '📋'),
       description: sqlString(row, 'description'),
       permission: share.permission,
+      // 创建链接时勾选的「限制编辑」：每个格子只能改一次
+      limitEdits: share.limitEdits,
       ownerId: sqlString(row, 'owner_id'),
       ownerName: sqlString(row, 'owner_name'),
     },
@@ -137,8 +139,9 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
           throw badRequest(`字段「${property.name}」已锁定，无法修改`);
         });
 
-  // 单元格级「只能改一次」：这条分享链接改过的格子不能再改（值没变的请求不受影响）
-  const editorKey = shareCellEditKey(share.shareId);
+  // 单元格级「限制编辑」：这条分享链接勾了「限制编辑」时，改过的格子不能再改
+  // （值没变的请求不受影响；没勾选时 editorKey 为 null，下面两个调用直接放行）
+  const editorKey = shareCellEditKey(share);
   const changed = body.values === undefined
     ? []
     : changedPropertyIds(properties, current.values, values, body.values);

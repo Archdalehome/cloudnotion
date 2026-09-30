@@ -160,7 +160,10 @@ export const api = {
     json<{ views: ViewDef[] }>(`/api/views/${id}`, 'PATCH', body),
   deleteView: (id: string) => json<{ views: ViewDef[] }>(`/api/views/${id}`, 'DELETE'),
 
-  createViewShare: (databaseId: string, body: { viewId: string; email: string; role: 'editor' | 'viewer' }) =>
+  createViewShare: (
+    databaseId: string,
+    body: { viewId: string; email: string; role: 'editor' | 'viewer'; limitEdits?: boolean },
+  ) =>
     json<{ viewShares: DatabaseDetail['viewShares'] }>(`/api/databases/${databaseId}/view-shares`, 'POST', body),
   deleteViewShare: (id: string) =>
     json<{ viewShares: DatabaseDetail['viewShares'] }>(`/api/view-shares/${id}`, 'DELETE'),
@@ -171,7 +174,7 @@ export const api = {
     json<{ members: DatabaseDetail['members'] }>(`/api/members/${id}`, 'PATCH', { role }),
   removeMember: (id: string) => json<{ members: DatabaseDetail['members'] }>(`/api/members/${id}`, 'DELETE'),
 
-  createShare: (databaseId: string, body: { permission: 'view' | 'edit'; expiresInDays?: number }) =>
+  createShare: (databaseId: string, body: { permission: 'view' | 'edit'; expiresInDays?: number; limitEdits?: boolean }) =>
     json<{ shares: DatabaseDetail['shares'] }>(`/api/databases/${databaseId}/shares`, 'POST', body),
   deleteShare: (id: string) => json<{ shares: DatabaseDetail['shares'] }>(`/api/shares/${id}`, 'DELETE'),
 

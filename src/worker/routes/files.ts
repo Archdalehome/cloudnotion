@@ -60,14 +60,15 @@ async function uploadHandler(ctx: RequestContext): Promise<Response> {
   // either an authenticated member with edit rights, or a share link with edit permission
   const token = typeof form.get('token') === 'string' ? String(form.get('token')) : '';
   let databaseId = typeof form.get('databaseId') === 'string' ? String(form.get('databaseId')) : '';
-  // 单元格级「只能改一次」的归属键；表格所有者 / 未登录的杂项上传为 null（不受限制）
+  // 单元格级「限制编辑」的归属键；表格所有者 / 表格成员 / 没勾选「限制编辑」的
+  // 分享都是 null（不受限制）
   let editorKey: string | null = null;
   if (token) {
     const share = await resolveShareToken(ctx.env, token);
     if (!share) throw notFound('分享链接无效或已过期');
     if (share.permission !== 'edit') throw forbidden('该分享链接不允许上传文件');
     databaseId = share.databaseId;
-    editorKey = shareCellEditKey(share.shareId);
+    editorKey = shareCellEditKey(share);
   } else if (databaseId) {
     if (!user) throw unauthorized();
     const access = await requireDatabaseAccess(ctx.env, databaseId, user, 'edit');
@@ -87,7 +88,7 @@ async function uploadHandler(ctx: RequestContext): Promise<Response> {
     if (property && sqlNumber(property, 'is_locked') === 1) {
       throw forbidden(`字段「${sqlString(property, 'name')}」已锁定，无法上传文件`);
     }
-    // 单元格级「只能改一次」：已经改过的格子不再接受新的上传
+    // 单元格级「限制编辑」：已经改过的格子不再接受新的上传
     if (recordId && property && (await isCellLocked(ctx.env, databaseId, editorKey, recordId, propertyId))) {
       throw forbidden(cellLockHint(sqlString(property, 'name')));
     }
@@ -192,7 +193,7 @@ async function deleteHandler(ctx: RequestContext): Promise<Response> {
       if (property && sqlNumber(property, 'is_locked') === 1) {
         throw forbidden(`字段「${sqlString(property, 'name')}」已锁定，无法删除附件`);
       }
-      // 单元格级「只能改一次」：已经改过的格子不再允许删除附件
+      // 单元格级「限制编辑」：已经改过的格子不再允许删除附件
       const recordId = sqlString(row, 'record_id');
       if (
         recordId

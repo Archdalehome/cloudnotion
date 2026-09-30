@@ -142,11 +142,6 @@ export function CellView({ property, row, users, editable, spent, onEdit, onQuic
       // 否则新单元格的编辑框刚打开就会被关掉（勾选类字段是就地切换，不算）
       data-start-edit={startable && !(property.type === 'checkbox' && onQuickChange) ? 'true' : undefined}
     >
-      {spent ? (
-        <span className="lock-mark" aria-hidden="true">
-          🔒
-        </span>
-      ) : null}
       {content}
     </button>
   );

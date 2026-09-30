@@ -16,7 +16,8 @@ export interface NewViewInput {
   name: string;
   filters: Filters;
   locked: boolean;
-  share?: { email: string; role: 'editor' | 'viewer' };
+  /** 定向分享（可选）：role = 'editor' 时可以额外勾选「限制编辑」 */
+  share?: { email: string; role: 'editor' | 'viewer'; limitEdits?: boolean };
 }
 
 interface ViewBarProps {
@@ -186,6 +187,8 @@ function NewViewForm({
   const [locked, setLocked] = useState(false);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'editor' | 'viewer'>('viewer');
+  /** 「限制编辑」：只随「可编辑」的定向分享一起提交 */
+  const [limitEdits, setLimitEdits] = useState(false);
 
   return (
     <div>
@@ -241,6 +244,18 @@ function NewViewForm({
             </select>
           </div>
           <p className="small muted">被分享者只能看到这一个视图及其中的数据。</p>
+          {role === 'editor' ? (
+            <label className="row gap" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={limitEdits}
+                onChange={(event) => setLimitEdits(event.target.checked)}
+              />
+              <span className="small">
+                限制编辑：被分享者对每个格子只有一次输入机会，改过之后该格子只能查看
+              </span>
+            </label>
+          ) : null}
         </>
       ) : null}
 
@@ -254,7 +269,7 @@ function NewViewForm({
               name: name.trim(),
               filters,
               locked,
-              share: canShare && email.trim() ? { email: email.trim(), role } : undefined,
+              share: canShare && email.trim() ? { email: email.trim(), role, limitEdits: role === 'editor' && limitEdits } : undefined,
             })
           }
         >

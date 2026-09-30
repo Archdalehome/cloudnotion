@@ -1,13 +1,17 @@
 /**
- * 单元格级「只能修改一次」：共享出来的可编辑用户对每一格数据只有一次修改机会。
+ * 单元格级「限制编辑」：分享时勾选了「限制编辑」的访问者对每一格数据只有一次
+ * 修改机会。
  *
- * - 公开链接访客 / 被邀请的 editor / 视图定向分享的 editor 都要受限制；
- * - 表格所有者不受限制，也永远不会写入 `cell_edits`；
- * - 第一次保存成功后登记（`rememberCellEdits`），之后同一个归属键再改同一格即被拒绝。
+ * - 只有带 `limit_edits = 1` 的分享才受限制：公开链接（shares）/ 视图定向分享
+ *   （view_shares）在创建时勾选了「限制编辑」才算；
+ * - 表格所有者、表格成员、以及没勾选「限制编辑」的分享都不受限制，
+ *   也永远不会写入 `cell_edits`；
+ * - 第一次保存成功后登记（`rememberCellEdits`），之后同一个归属键再改同一格
+ *   即被拒绝。
  */
 import { cellLockHint, cellLockKey, sameCellValue } from '../shared/fields';
 import type { Property, RowValues } from '../shared/types';
-import type { DatabaseAccess } from './access';
+import type { DatabaseAccess, ShareAccess } from './access';
 import { forbidden, newId, sqlString, type SqlRow } from './http';
 import type { Env } from './types';
 
@@ -16,14 +20,23 @@ const INSERT_CHUNK = 10;
 /** IN (...) 查询的分片大小：1 个 database_id + 1 个 editor_key + N 个记录 id */
 const SELECT_CHUNK = 90;
 
-/** 登录用户（表格成员 / 视图定向分享）的归属键；表格所有者返回 null（不受限制）。 */
-export function memberCellEditKey(access: Pick<DatabaseAccess, 'role' | 'userId'>): string | null {
-  return access.role === 'owner' ? null : `user:${access.userId}`;
+/**
+ * 登录用户（视图定向分享的 editor）的归属键。
+ * 表格所有者与表格成员返回 null（不受限制）。
+ */
+export function memberCellEditKey(
+  access: Pick<DatabaseAccess, 'role' | 'userId' | 'limitCellEdits'>,
+): string | null {
+  if (access.role === 'owner' || !access.limitCellEdits) return null;
+  return `user:${access.userId}`;
 }
 
-/** 公开分享链接的归属键：同一个链接的所有访客共用这一次机会。 */
-export function shareCellEditKey(shareId: string): string {
-  return `share:${shareId}`;
+/**
+ * 公开分享链接的归属键：同一个链接的所有访客共用这一次机会。
+ * 没勾选「限制编辑」的链接返回 null（不受限制）。
+ */
+export function shareCellEditKey(share: Pick<ShareAccess, 'shareId' | 'limitEdits'>): string | null {
+  return share.limitEdits ? `share:${share.shareId}` : null;
 }
 
 /**

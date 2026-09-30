@@ -427,16 +427,23 @@ async function main() {
 
   const shareEdit = await call(`/api/databases/${databaseId}/shares`, {
     method: 'POST',
-    body: { permission: 'edit' },
+    body: { permission: 'edit', limitEdits: true },
   });
-  const editToken = (shareEdit.data?.shares ?? []).find((share) => share.permission === 'edit')?.token;
-  check('create editable link', Boolean(editToken));
+  const editShareRow = (shareEdit.data?.shares ?? []).find((share) => share.permission === 'edit');
+  const editToken = editShareRow?.token;
+  check(
+    'create editable link with 限制编辑',
+    Boolean(editToken) && editShareRow?.limitEdits === true,
+    `limitEdits=${editShareRow?.limitEdits}`,
+  );
 
   const publicRead = await call(`/api/public/${viewToken}`, { cookie: false });
   check(
     'public read without a session',
-    publicRead.data?.database?.permission === 'view' && (publicRead.data?.rows?.length ?? 0) >= 1,
-    `rows=${publicRead.data?.rows?.length ?? 0}`,
+    publicRead.data?.database?.permission === 'view' &&
+      publicRead.data?.database?.limitEdits === false &&
+      (publicRead.data?.rows?.length ?? 0) >= 1,
+    `rows=${publicRead.data?.rows?.length ?? 0} limitEdits=${publicRead.data?.database?.limitEdits}`,
   );
 
   const publicWrite = await call(`/api/public/${viewToken}/records`, {
@@ -505,11 +512,59 @@ async function main() {
     `lockedCells=${textOf(lockedAfterEdits)}`,
   );
 
-  // 换一条编辑链接：同一个格子又拿到一次机会（按链接区分归属）
-  const shareIdsBefore = new Set((shareEdit.data?.shares ?? []).map((item) => item.id));
-  const shareEdit2 = await call(`/api/databases/${databaseId}/shares`, {
+  // 没勾选「限制编辑」的可编辑链接：同一个格子可以反复修改，也不会有锁定标记
+  const shareIdsBeforeFree = new Set((shareEdit.data?.shares ?? []).map((item) => item.id));
+  const freeLink = await call(`/api/databases/${databaseId}/shares`, {
     method: 'POST',
     body: { permission: 'edit' },
+  });
+  const freeShare = (freeLink.data?.shares ?? []).find((item) => !shareIdsBeforeFree.has(item.id));
+  check(
+    'an editable link without 限制编辑',
+    freeLink.status === 201 && freeShare?.permission === 'edit' && freeShare?.limitEdits === false,
+    `limitEdits=${freeShare?.limitEdits}`,
+  );
+
+  const freeFirstEdit = await call(`/api/public/${freeShare?.token}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [titleProperty.id]: '不限制编辑（第一次）' } },
+  });
+  const freeSecondEdit = await call(`/api/public/${freeShare?.token}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [titleProperty.id]: '不限制编辑（第二次）' } },
+  });
+  check(
+    'the same cell stays editable when 限制编辑 is off',
+    freeFirstEdit.status === 200 &&
+      freeSecondEdit.status === 200 &&
+      freeSecondEdit.data?.record?.values?.[titleProperty.id] === '不限制编辑（第二次）',
+    `first=${freeFirstEdit.status} second=${freeSecondEdit.status} err=${freeSecondEdit.data?.error?.message ?? ''}`,
+  );
+
+  const freePayload = await call(`/api/public/${freeShare?.token}`, { cookie: false });
+  check(
+    'an unlimited edit link reports no locked cells',
+    freePayload.data?.database?.limitEdits === false && (freePayload.data?.lockedCells ?? []).length === 0,
+    `limitEdits=${freePayload.data?.database?.limitEdits} lockedCells=${textOf(freePayload.data?.lockedCells)}`,
+  );
+
+  if (freeShare) {
+    const removedFreeLink = await call(`/api/shares/${freeShare.id}`, { method: 'DELETE' });
+    check(
+      'cleanup the unlimited edit link',
+      removedFreeLink.status === 200 && (removedFreeLink.data?.shares ?? []).every((item) => item.id !== freeShare.id),
+      `status=${removedFreeLink.status}`,
+    );
+  }
+
+  // 换一条编辑链接：同一个格子又拿到一次机会（按链接区分归属）
+  const shareIdsBefore = new Set((shareEdit.data?.shares ?? []).map((item) => item.id));
+  if (freeShare) shareIdsBefore.add(freeShare.id);
+  const shareEdit2 = await call(`/api/databases/${databaseId}/shares`, {
+    method: 'POST',
+    body: { permission: 'edit', limitEdits: true },
   });
   const editShare2 = (shareEdit2.data?.shares ?? []).find((item) => !shareIdsBefore.has(item.id));
   const secondLinkEdit = await call(`/api/public/${editShare2?.token}/records/${publicRecordId}`, {
@@ -770,12 +825,18 @@ async function main() {
   );
 
   // promote the same share so the guest may add a row of their own
+  // 「限制编辑」在分享时勾选：勾上之后被分享者每个格子只有一次输入机会
   cookie = ownerCookie;
   const meEditorShare = await call(`/api/databases/${databaseId}/view-shares`, {
     method: 'POST',
-    body: { viewId: meViewId, email: memberEmail, role: 'editor' },
+    body: { viewId: meViewId, email: memberEmail, role: 'editor', limitEdits: true },
   });
-  check('promote the 「当前用户」view share to editor', meEditorShare.status === 201, `status=${meEditorShare.status}`);
+  const meEditorRow = (meEditorShare.data?.viewShares ?? []).find((item) => item.email === memberEmail);
+  check(
+    'promote the 「当前用户」view share to editor（限制编辑）',
+    meEditorShare.status === 201 && meEditorRow?.role === 'editor' && meEditorRow?.limitEdits === true,
+    `status=${meEditorShare.status} limitEdits=${meEditorRow?.limitEdits}`,
+  );
 
   await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
   const mine = await call(`/api/databases/${databaseId}/records`, {
@@ -793,7 +854,7 @@ async function main() {
     `rows=${guestMine.data?.rows?.length ?? 0} createdBy=${mineRow?.createdBy ?? ''} member=${memberId ?? ''}`,
   );
 
-  // 共享出来的 editor（视图定向分享）同样每格只有一次修改机会
+  // 共享出来的 editor（视图定向分享）勾了「限制编辑」时每格只有一次修改机会
   const guestCellEdit = await call(`/api/records/${mineId}`, {
     method: 'PATCH',
     body: { values: { [titleProperty.id]: '@me 自建记录（改）' } },
@@ -819,6 +880,43 @@ async function main() {
     'the guest rows payload marks the spent cell',
     (guestRows.data?.lockedCells ?? []).includes(`${mineId}:${titleProperty.id}`),
     `lockedCells=${textOf(guestRows.data?.lockedCells)}`,
+  );
+
+  check(
+    'the guest detail reports the 限制编辑 flag',
+    guestMine.data?.limitCellEdits === true,
+    `limitCellEdits=${guestMine.data?.limitCellEdits}`,
+  );
+
+  // 同一个视图 + 同一个账号重新分享，这次不勾「限制编辑」：限制立刻取消
+  cookie = ownerCookie;
+  const relaxedShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: meViewId, email: memberEmail, role: 'editor' },
+  });
+  const relaxedRow = (relaxedShare.data?.viewShares ?? []).find((item) => item.email === memberEmail);
+  check(
+    'turn 限制编辑 off for the same view share',
+    relaxedShare.status === 201 && relaxedRow?.role === 'editor' && relaxedRow?.limitEdits === false,
+    `status=${relaxedShare.status} limitEdits=${relaxedRow?.limitEdits}`,
+  );
+
+  await call('/api/auth/login', { method: 'POST', body: { email: memberEmail, password: PASSWORD } });
+  const relaxedDetail = await call(`/api/databases/${databaseId}`);
+  check(
+    'the guest is no longer restricted',
+    relaxedDetail.data?.limitCellEdits === false && (relaxedDetail.data?.lockedCells ?? []).length === 0,
+    `limitCellEdits=${relaxedDetail.data?.limitCellEdits} lockedCells=${textOf(relaxedDetail.data?.lockedCells)}`,
+  );
+
+  const guestCellEditThird = await call(`/api/records/${mineId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '@me 自建记录（不限制编辑后）' } },
+  });
+  check(
+    'without 限制编辑 the guest may edit the same cell again',
+    guestCellEditThird.status === 200,
+    `status=${guestCellEditThird.status} err=${guestCellEditThird.data?.error?.message ?? ''}`,
   );
 
   // 「不是当前用户」= 别人创建的记录（表格所有者创建的那条依然在）

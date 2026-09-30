@@ -52,7 +52,8 @@ export function RecordDialog({
                 style={{ width: 120, flex: '0 0 120px' }}
                 title={spent ? cellLockHint(property.name) : undefined}
               >
-                {property.locked || spent ? '🔒 ' : ''}
+                {/* 「字段锁定」用 🔒 标注；「限制编辑」用掉的格子不加图标，鼠标悬停看提示 */}
+                {property.locked ? '🔒 ' : ''}
                 {property.name}
               </span>
               <div style={{ flex: 1, minWidth: 0 }} data-editing-cell={editing ? 'true' : undefined}>

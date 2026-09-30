@@ -17,6 +17,7 @@ import { requireUser } from '../auth';
 import { loadLockedCellKeys, memberCellEditKey } from '../cellEdits';
 import {
   asEnum,
+  asFlag,
   asString,
   badRequest,
   conflict,
@@ -446,7 +447,7 @@ export async function loadViewShares(env: Env, databaseId: string) {
 export async function buildDatabaseDetail(
   env: Env,
   databaseId: string,
-  access: Pick<DatabaseAccess, 'role' | 'viewIds' | 'userId'>,
+  access: Pick<DatabaseAccess, 'role' | 'viewIds' | 'userId' | 'limitCellEdits'>,
   url: URL,
 ): Promise<DatabaseDetail> {
   const row = await env.DB.prepare(
@@ -474,7 +475,7 @@ export async function buildDatabaseDetail(
   const properties = scoped ? scopedProperties(allProperties, views) : allProperties;
   // 「创建人 / 最后编辑人」取自行元数据，可能指向并非成员的定向分享用户
   const people = await loadPeopleNames(env, page.rows);
-  // 共享的可编辑用户「已经改过一次」的格子（所有者恒为空 —— 不受限制）
+  // 勾选了「限制编辑」的访问者「已经改过一次」的格子（其它人恒为空 —— 不受限制）
   const lockedCells = await loadLockedCellKeys(
     env,
     databaseId,
@@ -503,12 +504,22 @@ export async function buildDatabaseDetail(
     hasMore: offset + page.rows.length < page.total,
     people,
     lockedCells,
+    // 分享时勾选的「限制编辑」：前端据此把改过的格子标成只读
+    limitCellEdits: access.limitCellEdits,
   };
 }
 
 /** Synthetic access object for the just-created table of `ownerId`. */
 export function ownerAccess(databaseId: string, ownerId: string): DatabaseAccess {
-  return { databaseId, ownerId, userId: ownerId, role: 'owner', locked: false, viewIds: null };
+  return {
+    databaseId,
+    ownerId,
+    userId: ownerId,
+    role: 'owner',
+    locked: false,
+    viewIds: null,
+    limitCellEdits: false,
+  };
 }
 
 export async function touchDatabase(env: Env, databaseId: string): Promise<void> {
@@ -684,15 +695,17 @@ async function createShareHandler(ctx: RequestContext): Promise<Response> {
   await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
   const body = await readJson(ctx.request);
   const permission = asEnum(body.permission ?? 'view', ['view', 'edit'] as const, '权限');
+  // 「限制编辑」：只对可编辑链接有意义（只读链接本来就不能改）
+  const limitEdits = permission === 'edit' && asFlag(body.limitEdits);
   const days = Number(body.expiresInDays ?? 0);
   const expiresAt = Number.isFinite(days) && days > 0 ? Date.now() + days * 86_400_000 : null;
 
   const token = randomToken(24);
   await ctx.env.DB.prepare(
-    `INSERT INTO shares (id, database_id, token, permission, created_by, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO shares (id, database_id, token, permission, limit_edits, created_by, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(newId(), ctx.params.id, token, permission, user.id, expiresAt, Date.now())
+    .bind(newId(), ctx.params.id, token, permission, limitEdits ? 1 : 0, user.id, expiresAt, Date.now())
     .run();
 
   return json({ shares: await loadShares(ctx.env, ctx.params.id) }, { status: 201 });
@@ -716,6 +729,8 @@ async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
   const body = await readJson(ctx.request);
   const viewId = asString(body.viewId, '视图', { required: true, max: 64 });
   const role = asEnum(body.role ?? 'viewer', ['viewer', 'editor'] as const, '角色');
+  // 「限制编辑」：只对可编辑分享有意义（只读分享本来就不能改）
+  const limitEdits = role === 'editor' && asFlag(body.limitEdits);
   const email = normalizeEmail(body.email);
 
   const view = await ctx.env.DB.prepare('SELECT id FROM views WHERE id = ? AND database_id = ?')
@@ -729,11 +744,20 @@ async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
   if (targetId === access.ownerId) throw conflict('所有者已经拥有该表格');
 
   await ctx.env.DB.prepare(
-    `INSERT INTO view_shares (id, database_id, view_id, user_id, role, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (view_id, user_id) DO UPDATE SET role = excluded.role`,
+    `INSERT INTO view_shares (id, database_id, view_id, user_id, role, limit_edits, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (view_id, user_id) DO UPDATE SET role = excluded.role, limit_edits = excluded.limit_edits`,
   )
-    .bind(newId(), ctx.params.id, viewId, targetId, role, user.id, Date.now())
+    .bind(
+      newId(),
+      ctx.params.id,
+      viewId,
+      targetId,
+      role,
+      limitEdits ? 1 : 0,
+      user.id,
+      Date.now(),
+    )
     .run();
 
   await touchDatabase(ctx.env, ctx.params.id);

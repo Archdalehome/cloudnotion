@@ -62,8 +62,9 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const [nameDraft, setNameDraft] = useState(database.name);
   const [loadingMore, setLoadingMore] = useState(false);
   /**
-   * 当前访问者已经改过一次的格子（`记录 id:字段 id`）。共享给可编辑成员时每个格子
-   * 只有一次机会，改过的格子只读；数据库所有者永远是空集合。
+   * 当前访问者已经改过一次的格子（`记录 id:字段 id`）。
+   * 只有分享时勾选了「限制编辑」的访问者才有内容（每格只能改一次，改过的格子只读）；
+   * 表格所有者 / 表格成员 / 未勾选「限制编辑」的分享永远是空集合。
    */
   const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(
     () => new Set(database.lockedCells ?? []),
@@ -192,7 +193,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       return;
     }
     const cellKey = cellLockKey(row.id, property.id);
-    // 共享的可编辑用户每个格子只有一次机会：已经改过的格子只读，这里再挡一次
+    // 勾选了「限制编辑」的分享每格只有一次机会：已经改过的格子只读，这里再挡一次
     // （例如在另一个标签页里刚改过同一个格子）
     if (lockedCells.has(cellKey)) {
       onToast(cellLockHint(property.name), 'error');
@@ -213,8 +214,9 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     try {
       const result = await api.updateRecord(row.id, { values: { [property.id]: value ?? null } });
       if (result.record) replaceRow(result.record);
-      // 所有者不受限制；其它可编辑访问者改过之后这个格子就锁上了
-      if (!isOwner) mergeLockedCells([cellKey]);
+      // 只有勾选了「限制编辑」的访问者改过之后这个格子才锁上
+      // （所有者 / 表格成员 / 未勾选的分享可以反复修改）
+      if (detail.limitCellEdits) mergeLockedCells([cellKey]);
     } catch (cause) {
       fail(cause, '保存失败');
       replaceRow(row);
@@ -252,7 +254,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
 
   const uploadFile = async (row: RowRecord, property: Property, file: File): Promise<FileValue> => {
     if (property.locked) throw new Error(`字段「${property.name}」已锁定，无法上传文件`);
-    // 文件字段属于这个格子的值：改过一次之后也不允许再上传（服务端同样会拒绝）
+    // 文件字段属于这个格子的值：勾选了「限制编辑」时改过一次之后也不允许再上传
+    // （服务端同样会拒绝）
     if (lockedCells.has(cellLockKey(row.id, property.id))) {
       throw new Error(cellLockHint(property.name));
     }
@@ -299,9 +302,14 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
             viewId: result.viewId,
             email: input.share.email,
             role: input.share.role,
+            limitEdits: input.share.limitEdits,
           });
           setDetail((prev) => ({ ...prev, viewShares: shared.viewShares }));
-          onToast(`视图已定向分享给 ${input.share.email}`);
+          onToast(
+            input.share.limitEdits
+              ? `视图已定向分享给 ${input.share.email}（限制编辑）`
+              : `视图已定向分享给 ${input.share.email}`,
+          );
         } catch (cause) {
           fail(cause, '视图分享失败');
         }

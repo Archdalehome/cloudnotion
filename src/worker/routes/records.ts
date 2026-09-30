@@ -208,7 +208,8 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
           throw badRequest(`字段「${property.name}」已锁定，无法修改`);
         });
 
-  // 单元格级「只能改一次」：共享的可编辑用户改过的格子不能再改（所有者和值没变的请求不受影响）
+  // 单元格级「限制编辑」：勾选了「限制编辑」的分享改过的格子不能再改
+  // （表格所有者 / 表格成员 / 没勾选的分享 editorKey 为 null，直接放行）
   const editorKey = memberCellEditKey(access);
   const changed = body.values === undefined
     ? []

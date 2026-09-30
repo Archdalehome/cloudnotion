@@ -20,8 +20,9 @@ export function PublicPage({ token }: PublicPageProps) {
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
   /**
-   * 公开链接里已经被改过一次的格子（`记录 id:字段 id`）：每个格子只有一次机会，
-   * 谁先改谁用掉，之后所有通过该链接访问的人都只能看。
+   * 分享链接里已经被改过一次的格子（`记录 id:字段 id`）。
+   * 只有创建链接时勾选了「限制编辑」才有内容：每格只有一次机会，谁先改谁用掉，
+   * 之后所有通过该链接访问的人都只能看。
    */
   const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(() => new Set());
 
@@ -49,6 +50,8 @@ export function PublicPage({ token }: PublicPageProps) {
 
   const permission = payload?.database.permission ?? 'view';
   const canEdit = permission === 'edit';
+  /** 创建链接时勾选了「限制编辑」：每个格子只能改一次 */
+  const limitEdits = payload?.database.limitEdits === true;
   const properties = payload?.properties ?? [];
   const activeView = useMemo(
     () => payload?.views.find((view) => view.id === activeViewId) ?? payload?.views[0] ?? null,
@@ -73,7 +76,8 @@ export function PublicPage({ token }: PublicPageProps) {
     async (row: RowRecord, property: Property, value: CellValue | undefined) => {
       if (!canEdit) return;
       const cellKey = cellLockKey(row.id, property.id);
-      // 每个格子只有一次机会：已经改过的格子只读，这里再挡一次（例如在另一个标签页里改过）
+      // 勾选了「限制编辑」的链接每格只有一次机会：已经改过的格子只读，这里再挡一次
+      // （例如在另一个标签页里改过）
       if (lockedCells.has(cellKey)) {
         setError(cellLockHint(property.name));
         return;
@@ -94,13 +98,13 @@ export function PublicPage({ token }: PublicPageProps) {
         if (result.record) {
           setRows((prev) => prev.map((item) => (item.id === result.record!.id ? result.record! : item)));
         }
-        setLockedCells((prev) => new Set(prev).add(cellKey));
+        if (limitEdits) setLockedCells((prev) => new Set(prev).add(cellKey));
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : '保存失败');
         setRows((prev) => prev.map((item) => (item.id === row.id ? row : item)));
       }
     },
-    [canEdit, lockedCells, token],
+    [canEdit, limitEdits, lockedCells, token],
   );
 
   const createRow = useCallback(async () => {
@@ -159,6 +163,9 @@ export function PublicPage({ token }: PublicPageProps) {
       </header>
 
       {payload.database.description ? <p className="muted small share-desc">{payload.database.description}</p> : null}
+      {canEdit && limitEdits ? (
+        <p className="muted small share-desc">该链接已开启「限制编辑」：每个格子只能修改一次，改过之后只能查看。</p>
+      ) : null}
       {error ? <p className="error small share-desc">{error}</p> : null}
 
       {payload.views.length > 1 ? (

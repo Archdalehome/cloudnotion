@@ -122,6 +122,20 @@ export function asNumberValue(value: unknown, field: string): number {
   return num;
 }
 
+/**
+ * 可选开关（例如分享时的「限制编辑」）：接受 true / false、1 / 0、'true' / 'false'。
+ * `value` 缺省时返回 `fallback`（默认为关）。
+ */
+export function asFlag(value: unknown, fallback = false): boolean {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const text = String(value).trim().toLowerCase();
+  if (text === '1' || text === 'true' || text === 'yes' || text === 'on') return true;
+  if (text === '0' || text === 'false' || text === 'no' || text === 'off') return false;
+  return fallback;
+}
+
 export function asEnum<T extends string>(value: unknown, allowed: readonly T[], field: string): T {
   if (typeof value !== 'string' || !allowed.includes(value as T)) {
     throw badRequest(`${field} 只能是 ${allowed.join(' / ')}`);

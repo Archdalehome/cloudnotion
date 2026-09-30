@@ -195,6 +195,11 @@ export interface Share {
   databaseId: string;
   token: string;
   permission: 'view' | 'edit';
+  /**
+   * 创建链接时勾选的「限制编辑」：可编辑链接的访客对每个格子只有一次修改机会。
+   * 只读链接恒为 false（本来就不能改）。
+   */
+  limitEdits: boolean;
   createdAt: number;
   expiresAt: number | null;
 }
@@ -209,6 +214,11 @@ export interface ViewShare {
   email: string;
   name: string;
   role: Role;
+  /**
+   * 分享时勾选的「限制编辑」：被分享者（role = 'editor'）对每个格子只有一次修改机会。
+   * 可查看的分享恒为 false（本来就不能改）。
+   */
+  limitEdits: boolean;
   createdAt: number;
 }
 
@@ -256,10 +266,12 @@ export interface DatabaseDetail {
   hasMore: boolean;
   /**
    * 当前访问者「已经改过一次」的单元格（键为 `记录 id:字段 id`）。
-   * 共享的可编辑用户每个格子只有一次修改机会：前端据此把这些格子显示成只读，
-   * 表格所有者拿到的永远是空数组（所有者不受限制）。
+   * 只有分享时勾选了「限制编辑」的访问者才有内容：前端据此把这些格子显示成只读。
+   * 表格所有者、表格成员、以及没勾选「限制编辑」的分享拿到的永远是空数组。
    */
   lockedCells: string[];
+  /** 当前访问者是否受「限制编辑」约束（每个格子只能改一次） */
+  limitCellEdits: boolean;
   /**
    * 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名。
    * 定向分享的访问者不是表格成员，只有这份映射才能显示「创建人」的姓名。
@@ -301,6 +313,8 @@ export interface PublicDatabaseResponse {
     icon: string;
     description: string;
     permission: 'view' | 'edit';
+    /** 创建链接时勾选的「限制编辑」：每个格子只能改一次 */
+    limitEdits: boolean;
     /** 表格所有者（公开链接里「当前用户」筛选解析为这个人） */
     ownerId: string;
     ownerName: string;
@@ -314,7 +328,7 @@ export interface PublicDatabaseResponse {
   people: Record<string, string>;
   /**
    * 通过该分享链接「已经改过一次」的单元格（键为 `记录 id:字段 id`）。
-   * 可编辑链接的访客每个格子只有一次修改机会，前端据此显示只读。
+   * 链接勾选了「限制编辑」时才有内容，前端据此显示只读。
    */
   lockedCells: string[];
 }

@@ -31,6 +31,8 @@ export function SharePanel({
   const [viewId, setViewId] = useState(focusViewId ?? database.views[0]?.id ?? '');
   const [viewEmail, setViewEmail] = useState('');
   const [viewRole, setViewRole] = useState<'editor' | 'viewer'>('viewer');
+  /** 「限制编辑」：只对「可编辑」的分享有意义，默认不限制 */
+  const [viewLimitEdits, setViewLimitEdits] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const run = async (action: () => Promise<void>, fallback: string) => {
@@ -50,10 +52,16 @@ export function SharePanel({
     run(async () => {
       const target = viewEmail.trim();
       if (!target || !viewId) return;
-      const result = await api.createViewShare(database.id, { viewId, email: target, role: viewRole });
+      const result = await api.createViewShare(database.id, {
+        viewId,
+        email: target,
+        role: viewRole,
+        // 可查看的分享本来就不能改，「限制编辑」只随「可编辑」一起提交
+        limitEdits: viewRole === 'editor' && viewLimitEdits,
+      });
       onViewShares(result.viewShares);
       setViewEmail('');
-      onToast('视图已定向分享');
+      onToast(viewRole === 'editor' && viewLimitEdits ? '视图已定向分享（限制编辑）' : '视图已定向分享');
     }, '视图分享失败');
 
   const removeViewShare = (share: ViewShare) =>
@@ -72,10 +80,12 @@ export function SharePanel({
           viewId={viewId}
           email={viewEmail}
           role={viewRole}
+          limitEdits={viewLimitEdits}
           busy={busy}
           onView={setViewId}
           onEmail={setViewEmail}
           onRole={setViewRole}
+          onLimitEdits={setViewLimitEdits}
           onAdd={addViewShare}
           onRemove={removeViewShare}
         />
@@ -92,10 +102,13 @@ interface ShareViewsProps {
   viewId: string;
   email: string;
   role: 'editor' | 'viewer';
+  /** 分享时是否勾选「限制编辑」（仅 role === 'editor' 时提交） */
+  limitEdits: boolean;
   busy: boolean;
   onView: (value: string) => void;
   onEmail: (value: string) => void;
   onRole: (value: 'editor' | 'viewer') => void;
+  onLimitEdits: (value: boolean) => void;
   onAdd: () => void;
   onRemove: (share: ViewShare) => void;
 }
@@ -107,10 +120,12 @@ function ShareViews({
   viewId,
   email,
   role,
+  limitEdits,
   busy,
   onView,
   onEmail,
   onRole,
+  onLimitEdits,
   onAdd,
   onRemove,
 }: ShareViewsProps) {
@@ -130,6 +145,7 @@ function ShareViews({
                 <div className="small muted">
                   {share.name ? `${share.name} · ` : ''}
                   {ROLE_LABEL[share.role]}
+                  {share.limitEdits ? ' · 限制编辑（每个格子只能改一次）' : ''}
                 </div>
               </div>
               <button type="button" className="btn ghost small" disabled={busy} onClick={() => onRemove(share)}>
@@ -177,6 +193,20 @@ function ShareViews({
           分享视图
         </button>
       </form>
+
+      {role === 'editor' ? (
+        <label className="row gap" style={{ marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={limitEdits}
+            disabled={busy}
+            onChange={(event) => onLimitEdits(event.target.checked)}
+          />
+          <span className="small">
+            限制编辑：被分享者对每个格子只有一次输入机会，改过之后该格子只能查看
+          </span>
+        </label>
+      ) : null}
     </div>
   );
 }
