@@ -14,7 +14,7 @@ interface SidebarProps {
   inboxUnread: number;
   /** 是否展开（手机上是一个抽屉浮层） */
   open: boolean;
-  /** 窄屏时用 ✕ 收起抽屉，而不是桌面端的 « */
+  /** 窄屏时用 ✕ 收起抽屉，而不是桌面端的 «（按钮样式见 styles.css 的 .collapse-btn） */
   narrow: boolean;
   onSelect: (id: string) => void;
   onCreate: (input: { name: string }) => Promise<void>;
@@ -86,7 +86,7 @@ export function Sidebar({
         <span className="spacer" />
         <button
           type="button"
-          className="icon-btn"
+          className="icon-btn collapse-btn"
           title="收起侧边栏"
           aria-label="收起侧边栏"
           onClick={onClose}

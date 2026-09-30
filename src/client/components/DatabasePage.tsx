@@ -459,10 +459,14 @@ export function DatabasePage({
     }
   };
 
+  /**
+   * 表头 ▾ 菜单里的「↑ 升序 / ↓ 降序」：视图里只保留**一条**排序规则。
+   * 对某个字段排序会把之前其他字段（以及它自己旧的）排序规则整体替换掉，
+   * 所以各个字段之间的升降序互不影响、也不会互相叠加成多键排序。
+   */
   const addSortFor = (property: Property, direction: 'asc' | 'desc') => {
     if (!activeView || !viewEditable) return;
-    const others = (activeView.config.sorts ?? []).filter((rule) => rule.propertyId !== property.id);
-    updateActiveConfig({ sorts: [...others, { propertyId: property.id, direction }] });
+    updateActiveConfig({ sorts: [{ propertyId: property.id, direction }] });
   };
 
   const addFilterFor = (property: Property) => {
@@ -777,6 +781,7 @@ export function DatabasePage({
             onCreateRow={() => void createRow()}
           />
         ) : (
+          /* sortRule 是当前生效的排序（视图里最多一条规则），表头据此显示 ↑ / ↓ */
           <TableGrid
             properties={shownProperties}
             rows={filtered}
@@ -793,8 +798,7 @@ export function DatabasePage({
             onCreateRow={() => void createRow()}
             onCommitCell={commitCell}
             uploadFile={uploadFile}
-            onDuplicateRows={(targets) => void duplicateRows(targets)}
-            onDeleteRows={(targets) => void deleteRows(targets)}
+            sortRule={activeView?.config.sorts?.[0] ?? null}
             onAddProperty={(afterId) => setPropertyDialog({ mode: 'create', afterId })}
             onEditProperty={(property) => setPropertyDialog({ mode: 'edit', property })}
             onDeleteProperty={(property) => void deleteProperty(property)}

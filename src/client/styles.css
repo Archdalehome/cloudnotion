@@ -289,6 +289,15 @@ textarea.input {
   padding: 12px;
 }
 
+/* 收起侧边栏的 « / ✕ 按钮：比普通图标按钮大一号，点起来更省力 */
+.sidebar-head .collapse-btn {
+  width: 34px;
+  height: 34px;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .brand {
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -460,6 +469,7 @@ textarea.input {
   font-size: 12px;
 }
 
+/* 行首方框列：只保留配色，不再横向吸边（整列跟着表格一起左右滚动） */
 .grid th.row-head,
 .grid td.row-head {
   width: 44px;
@@ -468,13 +478,6 @@ textarea.input {
   color: var(--text-faint);
   font-size: 12px;
   background: var(--bg-soft);
-  position: sticky;
-  left: 0;
-  z-index: 1;
-}
-
-.grid thead th.row-head {
-  z-index: 3;
 }
 
 .grid tr:hover td {
@@ -514,6 +517,15 @@ textarea.input {
   flex: 0 0 auto;
   font-size: 10px;
   opacity: 0.8;
+}
+
+/* 表头字段名右侧的排序标记：当前视图只有一条排序规则（↑ 升序 / ↓ 降序） */
+.grid thead th .head .sort-mark {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
 }
 
 .resizer {
@@ -715,7 +727,7 @@ textarea.input {
   text-overflow: ellipsis;
 }
 
-/* 末尾的操作列（每行的复制 / 删除按钮）：表头只作占位，不再显示「＋ 字段」 */
+/* 公开分享页（PublicPage）行末「删除记录」操作列的占位表头：只在 /share/:token 用 */
 .add-col {
   width: 130px;
   min-width: 130px;

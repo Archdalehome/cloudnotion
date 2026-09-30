@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { FIELD_META, cellLockKey } from '../../shared/fields';
-import type { CellValue, FileValue, Property, RowRecord, ViewConfig } from '../../shared/types';
+import type { CellValue, FileValue, Property, RowRecord, SortRule, ViewConfig } from '../../shared/types';
 import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
 import { Popover } from './Popover';
 
@@ -29,8 +29,11 @@ interface TableGridProps {
   onCreateRow: () => void;
   onCommitCell: (row: RowRecord, property: Property, value: CellValue | undefined) => void;
   uploadFile: (row: RowRecord, property: Property, file: File) => Promise<FileValue>;
-  onDuplicateRows: (rows: RowRecord[]) => void;
-  onDeleteRows: (rows: RowRecord[]) => void;
+  /**
+   * 当前视图生效的排序规则。视图只保留一条规则：对某个字段升 / 降序会自动取消
+   * 其他字段的排序（见 DatabasePage.addSortFor），这里只用来在表头画 ↑ / ↓ 标记。
+   */
+  sortRule: SortRule | null;
   onAddProperty: (afterId: string | null) => void;
   onEditProperty: (property: Property) => void;
   onDeleteProperty: (property: Property) => void;
@@ -189,8 +192,7 @@ export function TableGrid(props: TableGridProps) {
     onCreateRow,
     onCommitCell,
     uploadFile,
-    onDuplicateRows,
-    onDeleteRows,
+    sortRule,
     onAddProperty,
     onResizeProperty,
     lockedCells,
@@ -249,7 +251,7 @@ export function TableGrid(props: TableGridProps) {
 
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
   const allSelected = rows.length > 0 && selectedRows.length === rows.length;
-  const totalWidth = properties.reduce((sum, property) => sum + widthOf(property), 44) + (canEditStructure ? 130 : 0);
+  const totalWidth = properties.reduce((sum, property) => sum + widthOf(property), 44);
 
   return (
     <div className="grid-wrap">
@@ -269,7 +271,6 @@ export function TableGrid(props: TableGridProps) {
           {properties.map((property) => (
             <col key={property.id} style={{ width: widthOf(property) }} />
           ))}
-          {canEditStructure ? <col style={{ width: 130 }} /> : null}
         </colgroup>
         <thead>
           <tr>
@@ -306,6 +307,14 @@ export function TableGrid(props: TableGridProps) {
                       🔒
                     </span>
                   ) : null}
+                  {sortRule && sortRule.propertyId === property.id ? (
+                    <span
+                      className="sort-mark"
+                      title={sortRule.direction === 'asc' ? '当前按该字段升序' : '当前按该字段降序'}
+                    >
+                      {sortRule.direction === 'asc' ? '↑' : '↓'}
+                    </span>
+                  ) : null}
                   {canEditStructure ? (
                     <Popover label="▾" title={`${property.name} 字段菜单`}>
                       {(close) => (
@@ -334,7 +343,7 @@ export function TableGrid(props: TableGridProps) {
               </th>
             ))}
             {/* 末尾的「＋ 字段」入口已移除：新增字段用表头 ▾ 菜单里的「＋ 在右侧插入」 */}
-            {canEditStructure ? <th className="add-col" /> : null}
+            {/* 每行末尾的「复制记录 / 删除记录」操作列也已移除：复制 / 删除改在勾选记录后的批量操作栏里做 */}
           </tr>
         </thead>
 
@@ -400,36 +409,12 @@ export function TableGrid(props: TableGridProps) {
                   </td>
                 );
               })}
-              {canEditStructure ? (
-                <td className="cell">
-                  <div className="row gap" style={{ padding: '0 4px' }}>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      title="复制记录"
-                      disabled={!canEdit}
-                      onClick={() => onDuplicateRows([row])}
-                    >
-                      ⧉
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      title="删除记录"
-                      disabled={!canEdit}
-                      onClick={() => onDeleteRows([row])}
-                    >
-                      🗑
-                    </button>
-                  </div>
-                </td>
-              ) : null}
             </tr>
           ))}
           {canEdit ? (
             <tr>
               <td className="row-head" />
-              <td className="cell" colSpan={properties.length + (canEditStructure ? 1 : 0)}>
+              <td className="cell" colSpan={properties.length}>
                 <button type="button" className="btn ghost small" onClick={onCreateRow}>
                   ＋ 新建记录
                 </button>
