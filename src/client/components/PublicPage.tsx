@@ -3,7 +3,7 @@
  * database. Reached through `/share/:token`.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FIELD_META } from '../../shared/fields';
+import { FIELD_META, cellLockHint, cellLockKey, sameCellValue } from '../../shared/fields';
 import type { CellValue, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
 import { applyView, visibleProperties } from '../lib/viewEngine';
@@ -19,6 +19,11 @@ export function PublicPage({ token }: PublicPageProps) {
   const [error, setError] = useState('');
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
+  /**
+   * 公开链接里已经被改过一次的格子（`记录 id:字段 id`）：每个格子只有一次机会，
+   * 谁先改谁用掉，之后所有通过该链接访问的人都只能看。
+   */
+  const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(() => new Set());
 
   // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
   useCloseOnOutsideClick(editing !== null, () => setEditing(null));
@@ -31,6 +36,7 @@ export function PublicPage({ token }: PublicPageProps) {
         if (cancelled) return;
         setPayload(data);
         setRows(data.rows);
+        setLockedCells(new Set(data.lockedCells ?? []));
         setActiveViewId(data.views[0]?.id ?? null);
       })
       .catch((cause) => {
@@ -66,6 +72,14 @@ export function PublicPage({ token }: PublicPageProps) {
   const commitCell = useCallback(
     async (row: RowRecord, property: Property, value: CellValue | undefined) => {
       if (!canEdit) return;
+      const cellKey = cellLockKey(row.id, property.id);
+      // 每个格子只有一次机会：已经改过的格子只读，这里再挡一次（例如在另一个标签页里改过）
+      if (lockedCells.has(cellKey)) {
+        setError(cellLockHint(property.name));
+        return;
+      }
+      // 值没变就不发请求，也不消耗那一次机会（与服务端的判断保持一致）
+      if (sameCellValue(row.values[property.id], value)) return;
       setRows((prev) =>
         prev.map((item) => {
           if (item.id !== row.id) return item;
@@ -80,12 +94,13 @@ export function PublicPage({ token }: PublicPageProps) {
         if (result.record) {
           setRows((prev) => prev.map((item) => (item.id === result.record!.id ? result.record! : item)));
         }
+        setLockedCells((prev) => new Set(prev).add(cellKey));
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : '保存失败');
         setRows((prev) => prev.map((item) => (item.id === row.id ? row : item)));
       }
     },
-    [canEdit, token],
+    [canEdit, lockedCells, token],
   );
 
   const createRow = useCallback(async () => {
@@ -214,6 +229,7 @@ export function PublicPage({ token }: PublicPageProps) {
                           row={row}
                           users={users}
                           editable={editable}
+                          spent={lockedCells.has(cellLockKey(row.id, property.id))}
                           onEdit={() => setEditing({ rowId: row.id, propertyId: property.id })}
                           onQuickChange={(value) => void commitCell(row, property, value)}
                         />

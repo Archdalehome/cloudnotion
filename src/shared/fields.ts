@@ -11,6 +11,7 @@ import type {
   FilterOperator,
   NumberFormat,
   OptionColor,
+  Property,
   PropertyConfig,
   SelectOption,
 } from './types';
@@ -220,6 +221,56 @@ export const CURRENT_USER_VALUE = '@me';
 /** 新建筛选条件时的默认值：人员类字段默认就是「当前用户」，其它类型留空。 */
 export function defaultFilterValueForType(type: FieldType): string {
   return isPersonType(type) ? CURRENT_USER_VALUE : '';
+}
+
+/* -------------------------------------------- 状态默认值 / 单元格一次性编辑 */
+
+/**
+ * 新建记录时状态字段的默认选项名：记录一创建就落在「录入中」，
+ * 之后由人工推进到「进行中 / 已完成」等状态。
+ */
+export const DEFAULT_STATUS_OPTION = '录入中';
+
+/**
+ * 该字段是否属于「新建记录时默认落到 录入中」的状态字段。
+ * 状态类字段（`status`）都适用；选项里还没有「录入中」时由 Worker 自动补一个。
+ */
+export function hasDefaultStatus(property: Pick<Property, 'type'>): boolean {
+  return property.type === 'status';
+}
+
+/**
+ * 单元格级锁定的键：`记录 id:字段 id`。
+ * Worker 用同样的拼法生成 `lockedCells`，客户端据此判断某个格子是否已经改过。
+ */
+export function cellLockKey(recordId: string, propertyId: string): string {
+  return `${recordId}:${propertyId}`;
+}
+
+/** 「每个格子只能改一次」的提示文案（Worker 与客户端共用同一句）。 */
+export function cellLockHint(name?: string): string {
+  return name
+    ? `「${name}」这条记录你已经改过一次了，如需再次修改请联系表格所有者`
+    : '这个格子你已经改过一次了，如需再次修改请联系表格所有者';
+}
+
+function canonicalValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalValue).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalValue(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * 深度比较两个单元格的值（忽略对象键顺序与 `undefined`）。
+ * 用来判断一次保存请求是否真的改了值 —— 值没变不该消耗「每个格子只能改一次」的机会。
+ */
+export function sameCellValue(left: unknown, right: unknown): boolean {
+  return canonicalValue(left) === canonicalValue(right);
 }
 
 /* ------------------------------------------------------------- value helpers */

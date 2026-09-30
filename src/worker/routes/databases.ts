@@ -14,6 +14,7 @@ import { rowMatchesView } from '../../shared/viewFilter';
 import { defaultViewConfig } from '../../shared/views';
 import { requireDatabaseAccess, type DatabaseAccess } from '../access';
 import { requireUser } from '../auth';
+import { loadLockedCellKeys, memberCellEditKey } from '../cellEdits';
 import {
   asEnum,
   asString,
@@ -473,6 +474,13 @@ export async function buildDatabaseDetail(
   const properties = scoped ? scopedProperties(allProperties, views) : allProperties;
   // 「创建人 / 最后编辑人」取自行元数据，可能指向并非成员的定向分享用户
   const people = await loadPeopleNames(env, page.rows);
+  // 共享的可编辑用户「已经改过一次」的格子（所有者恒为空 —— 不受限制）
+  const lockedCells = await loadLockedCellKeys(
+    env,
+    databaseId,
+    memberCellEditKey(access),
+    page.rows.map((item) => item.id),
+  );
 
   return {
     id: databaseId,
@@ -494,6 +502,7 @@ export async function buildDatabaseDetail(
     total: page.total,
     hasMore: offset + page.rows.length < page.total,
     people,
+    lockedCells,
   };
 }
 
@@ -550,7 +559,13 @@ async function recordsPageHandler(ctx: RequestContext): Promise<Response> {
   const limit = clampLimit(ctx.url);
   const offset = clampOffset(ctx.url);
   const { rows, total } = await visibleRecords(ctx.env, ctx.params.id, access, limit, offset);
-  return json({ rows, total, hasMore: offset + rows.length < total });
+  const lockedCells = await loadLockedCellKeys(
+    ctx.env,
+    ctx.params.id,
+    memberCellEditKey(access),
+    rows.map((row) => row.id),
+  );
+  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells });
 }
 
 async function updateHandler(ctx: RequestContext): Promise<Response> {

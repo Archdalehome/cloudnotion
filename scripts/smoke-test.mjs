@@ -144,6 +144,8 @@ async function main() {
   const titleProperty = (created.data.properties ?? []).find((property) => property.type === 'text');
   const statusProperty = (created.data.properties ?? []).find((property) => property.type === 'select');
   const checkProperty = (created.data.properties ?? []).find((property) => property.type === 'checkbox');
+  // 任务模板里的「状态」是 status 类型字段：新建记录默认落到「录入中」
+  const stateProperty = (created.data.properties ?? []).find((property) => property.type === 'status');
 
   const added = await call(`/api/databases/${databaseId}/properties`, {
     method: 'POST',
@@ -214,6 +216,39 @@ async function main() {
     body: { recordIds: (bulk.data?.records ?? []).map((record) => record.id) },
   });
   check('bulk delete', bulkDelete.data?.deleted === 2, `total=${bulkDelete.data?.total}`);
+
+  // -------------------------------------------- 状态默认值（新建 → 录入中）
+  section('status defaults (录入中)');
+  const rowsWithStatus = await call(`/api/databases/${databaseId}/rows?limit=50`);
+  const firstRow = (rowsWithStatus.data?.rows ?? []).find((row) => row.id === firstId);
+  check(
+    'new record defaults its status field to 录入中',
+    Boolean(stateProperty) && firstRow?.values?.[stateProperty.id]?.name === '录入中',
+    `status=${textOf(firstRow?.values?.[stateProperty?.id])}`,
+  );
+
+  const detailWithStatus = await call(`/api/databases/${databaseId}`);
+  const statusWithDefault = (detailWithStatus.data?.properties ?? []).find((property) => property.id === stateProperty?.id);
+  check(
+    '「录入中」is appended to the status field options',
+    (statusWithDefault?.config?.options ?? []).some((option) => option.name === '录入中'),
+    `options=${textOf((statusWithDefault?.config?.options ?? []).map((option) => option.name))}`,
+  );
+
+  const explicitStatus = await call(`/api/databases/${databaseId}/records`, {
+    method: 'POST',
+    body: { values: { [titleProperty.id]: '显式状态', [stateProperty?.id]: '进行中' } },
+  });
+  check(
+    'an explicitly provided status value is kept',
+    explicitStatus.data?.record?.values?.[stateProperty?.id]?.name === '进行中',
+    `status=${textOf(explicitStatus.data?.record?.values?.[stateProperty?.id])}`,
+  );
+  const explicitStatusId = explicitStatus.data?.record?.id;
+  if (explicitStatusId) {
+    const explicitRemoved = await call(`/api/records/${explicitStatusId}`, { method: 'DELETE' });
+    check('cleanup the explicit status row', explicitRemoved.data?.ok === true, `status=${explicitRemoved.status}`);
+  }
 
   // -------------------------------------------------------------------- views
   section('views');
@@ -425,6 +460,94 @@ async function main() {
     body: { values: { [titleProperty.id]: '公开链接已更新' } },
   });
   check('editable link updates a row', publicPatch.data?.record?.values?.[titleProperty.id] === '公开链接已更新');
+
+  // 共享出去的访客每个格子只有一次修改机会（同一条链接的访客共用这个机会）
+  const publicSecondEdit = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [titleProperty.id]: '第二次修改应被拒绝' } },
+  });
+  check(
+    'editable link cannot change the same cell twice',
+    publicSecondEdit.status === 403,
+    `status=${publicSecondEdit.status} err=${publicSecondEdit.data?.error?.message ?? ''}`,
+  );
+
+  // 提交的值没变不算改动，不会白白消耗那次机会
+  const publicNoopEdit = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [titleProperty.id]: '公开链接已更新' } },
+  });
+  check(
+    'an unchanged value does not spend the one-shot chance',
+    publicNoopEdit.status === 200,
+    `status=${publicNoopEdit.status} err=${publicNoopEdit.data?.error?.message ?? ''}`,
+  );
+
+  const publicOtherCell = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [numberProperty?.id]: 11 } },
+  });
+  check(
+    'a different cell is still editable',
+    publicOtherCell.status === 200 && publicOtherCell.data?.record?.values?.[numberProperty?.id] === 11,
+    `status=${publicOtherCell.status} err=${publicOtherCell.data?.error?.message ?? ''}`,
+  );
+
+  const publicAfterEdits = await call(`/api/public/${editToken}`, { cookie: false });
+  const lockedAfterEdits = publicAfterEdits.data?.lockedCells ?? [];
+  check(
+    'the public payload lists the cells this link already used up',
+    lockedAfterEdits.includes(`${publicRecordId}:${titleProperty.id}`) &&
+      lockedAfterEdits.includes(`${publicRecordId}:${numberProperty?.id}`),
+    `lockedCells=${textOf(lockedAfterEdits)}`,
+  );
+
+  // 换一条编辑链接：同一个格子又拿到一次机会（按链接区分归属）
+  const shareIdsBefore = new Set((shareEdit.data?.shares ?? []).map((item) => item.id));
+  const shareEdit2 = await call(`/api/databases/${databaseId}/shares`, {
+    method: 'POST',
+    body: { permission: 'edit' },
+  });
+  const editShare2 = (shareEdit2.data?.shares ?? []).find((item) => !shareIdsBefore.has(item.id));
+  const secondLinkEdit = await call(`/api/public/${editShare2?.token}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [titleProperty.id]: '另一条链接还能改一次' } },
+  });
+  check(
+    'another edit link gets its own one-shot chance',
+    secondLinkEdit.status === 200,
+    `status=${secondLinkEdit.status} err=${secondLinkEdit.data?.error?.message ?? ''}`,
+  );
+
+  // 表格所有者不受「只能改一次」限制，也看不到锁定标记
+  const ownerEditsSpentCell = await call(`/api/records/${publicRecordId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '所有者不受限制' } },
+  });
+  check(
+    'the owner may edit a spent cell',
+    ownerEditsSpentCell.status === 200 && ownerEditsSpentCell.data?.record?.values?.[titleProperty.id] === '所有者不受限制',
+    `status=${ownerEditsSpentCell.status}`,
+  );
+  const ownerRows = await call(`/api/databases/${databaseId}/rows?limit=50`);
+  check(
+    'the owner sees no locked cells',
+    Array.isArray(ownerRows.data?.lockedCells) && ownerRows.data.lockedCells.length === 0,
+    `lockedCells=${textOf(ownerRows.data?.lockedCells)}`,
+  );
+
+  if (editShare2) {
+    const removedSecondLink = await call(`/api/shares/${editShare2.id}`, { method: 'DELETE' });
+    check(
+      'cleanup the second edit link',
+      (removedSecondLink.data?.shares ?? []).length === 2,
+      `shares=${removedSecondLink.data?.shares?.length ?? 0}`,
+    );
+  }
 
   const publicDelete = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
     method: 'DELETE',
@@ -668,6 +791,34 @@ async function main() {
     '「当前用户」view shows exactly the visitor own row',
     (guestMine.data?.rows ?? []).length === 1 && mineRow?.createdBy === memberId,
     `rows=${guestMine.data?.rows?.length ?? 0} createdBy=${mineRow?.createdBy ?? ''} member=${memberId ?? ''}`,
+  );
+
+  // 共享出来的 editor（视图定向分享）同样每格只有一次修改机会
+  const guestCellEdit = await call(`/api/records/${mineId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '@me 自建记录（改）' } },
+  });
+  check(
+    'a shared editor may edit a cell once',
+    guestCellEdit.status === 200,
+    `status=${guestCellEdit.status} err=${guestCellEdit.data?.error?.message ?? ''}`,
+  );
+
+  const guestCellEditAgain = await call(`/api/records/${mineId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '@me 自建记录（再改）' } },
+  });
+  check(
+    'a shared editor cannot edit the same cell twice',
+    guestCellEditAgain.status === 403,
+    `status=${guestCellEditAgain.status} err=${guestCellEditAgain.data?.error?.message ?? ''}`,
+  );
+
+  const guestRows = await call(`/api/databases/${databaseId}/rows?limit=50`);
+  check(
+    'the guest rows payload marks the spent cell',
+    (guestRows.data?.lockedCells ?? []).includes(`${mineId}:${titleProperty.id}`),
+    `lockedCells=${textOf(guestRows.data?.lockedCells)}`,
   );
 
   // 「不是当前用户」= 别人创建的记录（表格所有者创建的那条依然在）

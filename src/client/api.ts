@@ -28,6 +28,8 @@ export interface RecordsPage {
   rows: RowRecord[];
   total: number;
   hasMore: boolean;
+  /** 当前访问者已经改过一次的格子（`记录 id:字段 id`）；所有者恒为空 */
+  lockedCells: string[];
 }
 
 export interface UploadResult {

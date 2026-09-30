@@ -4,6 +4,13 @@ import type { Property, RowRecord, RowValues } from '../../shared/types';
 import { accessForRecord, requireDatabaseAccess } from '../access';
 import { requireUser } from '../auth';
 import {
+  assertCellsEditable,
+  changedPropertyIds,
+  loadLockedCellKeys,
+  memberCellEditKey,
+  rememberCellEdits,
+} from '../cellEdits';
+import {
   asNumberValue,
   badRequest,
   json,
@@ -16,6 +23,7 @@ import {
   type SqlRow,
 } from '../http';
 import { recordFromRow } from '../mappers';
+import { withDefaultStatus } from '../statusDefaults';
 import type { Env, RequestContext, Route } from '../types';
 import { countRecords, loadProperties, loadRecord, loadRecords, touchDatabase } from './databases';
 
@@ -87,7 +95,13 @@ async function createRecordHandler(ctx: RequestContext): Promise<Response> {
   const properties = await loadProperties(ctx.env, ctx.params.id);
   if (!properties.length) throw badRequest('该表格还没有字段');
 
-  const values = normalizeValues(properties, body.values);
+  // 新建的记录状态默认落到「录入中」（字段里还没有这个选项时自动补一个）
+  const values = await withDefaultStatus(
+    ctx.env,
+    ctx.params.id,
+    properties,
+    normalizeValues(properties, body.values),
+  );
   const position = await positionAfter(ctx.env, ctx.params.id, body.afterId ? String(body.afterId) : null);
 
   const recordId = newId();
@@ -143,7 +157,13 @@ async function bulkCreateHandler(ctx: RequestContext): Promise<Response> {
     const source = item && typeof item === 'object' && 'values' in (item as Record<string, unknown>)
       ? (item as { values: unknown }).values
       : item;
-    const values = normalizeValues(properties, source);
+    // 批量新建同样带上状态默认值（值没传时才补）
+    const values = await withDefaultStatus(
+      ctx.env,
+      ctx.params.id,
+      properties,
+      normalizeValues(properties, source),
+    );
     const id = newId();
     ids.push(id);
     statements.push(
@@ -188,6 +208,13 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
           throw badRequest(`字段「${property.name}」已锁定，无法修改`);
         });
 
+  // 单元格级「只能改一次」：共享的可编辑用户改过的格子不能再改（所有者和值没变的请求不受影响）
+  const editorKey = memberCellEditKey(access);
+  const changed = body.values === undefined
+    ? []
+    : changedPropertyIds(properties, current.values, values, body.values);
+  await assertCellsEditable(ctx.env, access.databaseId, editorKey, ctx.params.id, changed, properties);
+
   const fields = ['"values" = ?', 'updated_by = ?', 'updated_at = ?'];
   const params: unknown[] = [JSON.stringify(values), user.id, Date.now()];
   if (body.position !== undefined) {
@@ -198,6 +225,8 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
   await ctx.env.DB.prepare(`UPDATE records SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...params)
     .run();
+  // 写入成功之后才登记，避免失败的请求白白消耗机会
+  await rememberCellEdits(ctx.env, access.databaseId, editorKey, ctx.params.id, changed);
   await touchDatabase(ctx.env, access.databaseId);
 
   return json({
@@ -269,14 +298,20 @@ async function bulkDeleteHandler(ctx: RequestContext): Promise<Response> {
 /** Fresh page of rows (used by "load more" when a table holds more than one page). */
 async function pageHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
-  await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
+  const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
   const limit = Math.min(Math.max(Math.floor(Number(ctx.url.searchParams.get('limit')) || 200), 1), 1000);
   const offset = Math.max(Math.floor(Number(ctx.url.searchParams.get('offset')) || 0), 0);
   const [rows, total] = await Promise.all([
     loadRecords(ctx.env, ctx.params.id, limit, offset),
     countRecords(ctx.env, ctx.params.id),
   ]);
-  return json({ rows, total, hasMore: offset + rows.length < total });
+  const lockedCells = await loadLockedCellKeys(
+    ctx.env,
+    ctx.params.id,
+    memberCellEditKey(access),
+    rows.map((row) => row.id),
+  );
+  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells });
 }
 
 export const recordRoutes: Route[] = [

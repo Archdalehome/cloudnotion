@@ -2,6 +2,13 @@
 import type { PublicDatabaseResponse } from '../../shared/types';
 import { resolveShareToken, type ShareAccess } from '../access';
 import {
+  assertCellsEditable,
+  changedPropertyIds,
+  loadLockedCellKeys,
+  rememberCellEdits,
+  shareCellEditKey,
+} from '../cellEdits';
+import {
   asNumberValue,
   badRequest,
   forbidden,
@@ -14,6 +21,7 @@ import {
   type SqlRow,
 } from '../http';
 import { recordFromRow } from '../mappers';
+import { withDefaultStatus } from '../statusDefaults';
 import type { Env, RequestContext, Route } from '../types';
 import { countRecords, loadPeopleNames, loadProperties, loadRecords, loadViews, touchDatabase } from './databases';
 import { normalizeValues } from './records';
@@ -49,6 +57,13 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
   ]);
   // 公开链接也要能显示「创建人 / 最后编辑人」的姓名（表格所有者 + 协作者）
   const people = await loadPeopleNames(ctx.env, rows);
+  // 通过该分享链接已经改过一次的格子（可编辑链接的访客每个格子只有一次机会）
+  const lockedCells = await loadLockedCellKeys(
+    ctx.env,
+    share.databaseId,
+    shareCellEditKey(share.shareId),
+    rows.map((item) => item.id),
+  );
 
   const payload: PublicDatabaseResponse = {
     database: {
@@ -66,6 +81,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     total,
     hasMore: offset + rows.length < total,
     people,
+    lockedCells,
   };
   return json(payload);
 }
@@ -76,7 +92,12 @@ async function publicCreateRecordHandler(ctx: RequestContext): Promise<Response>
   const properties = await loadProperties(ctx.env, share.databaseId);
   if (!properties.length) throw badRequest('该表格还没有字段');
 
-  const values = normalizeValues(properties, body.values);
+  const values = await withDefaultStatus(
+    ctx.env,
+    share.databaseId,
+    properties,
+    normalizeValues(properties, body.values),
+  );
   const row = await ctx.env.DB.prepare(
     'SELECT MAX(position) AS max_position FROM records WHERE database_id = ? AND is_archived = 0',
   )
@@ -116,6 +137,13 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
           throw badRequest(`字段「${property.name}」已锁定，无法修改`);
         });
 
+  // 单元格级「只能改一次」：这条分享链接改过的格子不能再改（值没变的请求不受影响）
+  const editorKey = shareCellEditKey(share.shareId);
+  const changed = body.values === undefined
+    ? []
+    : changedPropertyIds(properties, current.values, values, body.values);
+  await assertCellsEditable(ctx.env, share.databaseId, editorKey, ctx.params.recordId, changed, properties);
+
   const fields = ['"values" = ?', 'updated_at = ?'];
   const params: unknown[] = [JSON.stringify(values), Date.now()];
   if (body.position !== undefined) {
@@ -126,6 +154,8 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
   await ctx.env.DB.prepare(`UPDATE records SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...params)
     .run();
+  // 写入成功之后才登记，避免失败的请求白白消耗机会
+  await rememberCellEdits(ctx.env, share.databaseId, editorKey, ctx.params.recordId, changed);
   await touchDatabase(ctx.env, share.databaseId);
 
   const updated = await ctx.env.DB.prepare('SELECT * FROM records WHERE id = ?')

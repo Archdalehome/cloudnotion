@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  cellLockHint,
   formatDateValue,
   formatTimestamp,
   formatValueForDisplay,
@@ -44,13 +45,19 @@ interface CellViewProps {
   property: Property;
   row: RowRecord;
   users: UserNames;
+  /** 这个格子是否允许编辑（访问权 + 字段锁 + 字段类型都会影响它） */
   editable: boolean;
+  /**
+   * 该格子已经被当前访问者改过一次（共享的可编辑用户每个格子只有一次机会）。
+   * 为真时呈现为只读并给出提示，单击也不会进入编辑。
+   */
+  spent?: boolean;
   onEdit: () => void;
   /** checkbox cells commit on a single click instead of opening an editor */
   onQuickChange?: (next: CellValue | undefined) => void;
 }
 
-export function CellView({ property, row, users, editable, onEdit, onQuickChange }: CellViewProps) {
+export function CellView({ property, row, users, editable, spent, onEdit, onQuickChange }: CellViewProps) {
   const value = row.values[property.id];
 
   if (property.type === 'created_time' || property.type === 'updated_time' || property.type === 'created_by' || property.type === 'updated_by') {
@@ -58,8 +65,9 @@ export function CellView({ property, row, users, editable, onEdit, onQuickChange
   }
 
   const empty = isEmptyValue(value);
+  const startable = editable && !spent;
   const start = () => {
-    if (!editable) return;
+    if (!startable) return;
     if (property.type === 'checkbox' && onQuickChange) {
       onQuickChange(value === true ? undefined : true);
       return;
@@ -124,13 +132,21 @@ export function CellView({ property, row, users, editable, onEdit, onQuickChange
   return (
     <button
       type="button"
-      className={`cell-view${empty ? ' empty' : ''}`}
+      className={`cell-view${empty ? ' empty' : ''}${spent ? ' spent' : ''}`}
       onClick={start}
-      disabled={!editable}
-      // 点击它就会开始编辑这个单元格：调用方的「点别处退出输入」据此放行，
+      // 「已改过一次」的格子保持可悬停（这样才看得到提示），但点击不再进入编辑
+      disabled={!editable && !spent}
+      aria-disabled={startable ? undefined : true}
+      title={spent ? cellLockHint(property.name) : undefined}
+      // 单击它就会开始编辑这个单元格：调用方的「点别处退出输入」据此放行，
       // 否则新单元格的编辑框刚打开就会被关掉（勾选类字段是就地切换，不算）
-      data-start-edit={editable && !(property.type === 'checkbox' && onQuickChange) ? 'true' : undefined}
+      data-start-edit={startable && !(property.type === 'checkbox' && onQuickChange) ? 'true' : undefined}
     >
+      {spent ? (
+        <span className="lock-mark" aria-hidden="true">
+          🔒
+        </span>
+      ) : null}
       {content}
     </button>
   );

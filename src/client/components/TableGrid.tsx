@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FIELD_META } from '../../shared/fields';
+import { FIELD_META, cellLockKey } from '../../shared/fields';
 import type { CellValue, FileValue, Property, RowRecord, ViewConfig } from '../../shared/types';
 import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
 import { Popover } from './Popover';
@@ -36,6 +36,13 @@ interface TableGridProps {
   onResizeProperty: (property: Property, width: number) => void;
   onSortProperty: (property: Property, direction: 'asc' | 'desc') => void;
   onFilterProperty: (property: Property) => void;
+  /**
+   * 当前访问者已经改过一次的格子（`记录 id:字段 id`）：共享给可编辑成员 / 公开链接时
+   * 每个格子只有一次修改机会，改过的格子只读。所有者访问时为空集合。
+   */
+  lockedCells: ReadonlySet<string>;
+  /** 双击一行打开记录卡片 */
+  onOpenRecord: (row: RowRecord) => void;
 }
 
 function ColumnMenu({
@@ -178,6 +185,8 @@ export function TableGrid(props: TableGridProps) {
     onDeleteRows,
     onAddProperty,
     onResizeProperty,
+    lockedCells,
+    onOpenRecord,
   } = props;
 
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
@@ -218,6 +227,18 @@ export function TableGrid(props: TableGridProps) {
   const toggleRow = (id: string) => {
     if (!selectable) return;
     setSelected((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  /**
+   * 双击一行打开记录卡片。单击单元格已经会进入编辑态，所以打开卡片前必须先退出编辑，
+   * 否则编辑框会和卡片同时出现。
+   */
+  const openRowCard = (event: React.MouseEvent<HTMLTableRowElement>, row: RowRecord) => {
+    const target = event.target;
+    // 行首的方框是勾选记录用的：双击它只是勾选 / 取消勾选，不打开卡片
+    if (target instanceof HTMLElement && target.closest('.row-head')) return;
+    setEditing(null);
+    onOpenRecord(row);
   };
 
   const selectedRows = rows.filter((row) => selected.includes(row.id));
@@ -342,7 +363,11 @@ export function TableGrid(props: TableGridProps) {
 
         <tbody>
           {rows.map((row) => (
-            <tr key={row.id} className={selected.includes(row.id) ? 'selected' : undefined}>
+            <tr
+              key={row.id}
+              className={selected.includes(row.id) ? 'selected' : undefined}
+              onDoubleClick={(event) => openRowCard(event, row)}
+            >
               <td className="row-head">
                 <input
                   type="checkbox"
@@ -355,6 +380,8 @@ export function TableGrid(props: TableGridProps) {
               {properties.map((property) => {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
                 const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
+                /** 共享的可编辑用户每个格子只有一次机会，已经用掉的格子只读 */
+                const spent = lockedCells.has(cellLockKey(row.id, property.id));
                 return (
                   <td
                     key={property.id}
@@ -379,6 +406,7 @@ export function TableGrid(props: TableGridProps) {
                         row={row}
                         users={users}
                         editable={editable}
+                        spent={spent}
                         onEdit={() => setEditing({ rowId: row.id, propertyId: property.id })}
                         onQuickChange={(value) => onCommitCell(row, property, value)}
                       />

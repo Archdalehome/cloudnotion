@@ -559,6 +559,18 @@ textarea.input {
   color: var(--text);
 }
 
+/* 「每个格子只能改一次」：已经改过的格子保持可悬停（提示为什么不能改），但不再可编辑 */
+.cell-view.spent {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.cell-view.spent .lock-mark {
+  flex: 0 0 auto;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
 .cell-static {
   display: inline-flex;
   align-items: center;

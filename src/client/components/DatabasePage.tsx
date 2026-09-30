@@ -3,7 +3,7 @@
  * view body (table / board / gallery). Owns every mutation for one database.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { createId, defaultFilterValueForType, defaultOperatorForType } from '../../shared/fields';
+import { createId, cellLockHint, cellLockKey, defaultFilterValueForType, defaultOperatorForType, sameCellValue } from '../../shared/fields';
 import type {
   CellValue,
   DatabaseDetail,
@@ -61,12 +61,20 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
   const [shareViewId, setShareViewId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState(database.name);
   const [loadingMore, setLoadingMore] = useState(false);
+  /**
+   * 当前访问者已经改过一次的格子（`记录 id:字段 id`）。共享给可编辑成员时每个格子
+   * 只有一次机会，改过的格子只读；数据库所有者永远是空集合。
+   */
+  const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(
+    () => new Set(database.lockedCells ?? []),
+  );
 
   useEffect(() => {
     setDetail(database);
     setRows(database.rows);
     setTotal(database.total);
     setHasMore(database.hasMore);
+    setLockedCells(new Set(database.lockedCells ?? []));
     setNameDraft(database.name);
     setActiveViewId((prev) =>
       prev && database.views.some((view) => view.id === prev) ? prev : database.views[0]?.id ?? null,
@@ -115,6 +123,16 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     [onToast],
   );
 
+  /** 把服务端返回的「已改过一次的格子」并进本地状态（只会增加，不会凭空移除） */
+  const mergeLockedCells = useCallback((keys: string[] | undefined) => {
+    if (!keys?.length) return;
+    setLockedCells((prev) => {
+      const next = new Set(prev);
+      for (const key of keys) next.add(key);
+      return next;
+    });
+  }, []);
+
   /** Re-fetch the first page (used after structural changes). */
   const reload = useCallback(async () => {
     try {
@@ -123,10 +141,11 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       setRows(next.rows);
       setTotal(next.total);
       setHasMore(next.hasMore);
+      mergeLockedCells(next.lockedCells);
     } catch (cause) {
       fail(cause, '刷新失败');
     }
-  }, [detail.id, fail]);
+  }, [detail.id, fail, mergeLockedCells]);
 
   const replaceRow = useCallback((record: RowRecord) => {
     setRows((prev) => {
@@ -146,6 +165,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       setRows((prev) => [...prev, ...page.rows.filter((row) => !prev.some((item) => item.id === row.id))]);
       setTotal(page.total);
       setHasMore(page.hasMore);
+      mergeLockedCells(page.lockedCells);
     } catch (cause) {
       fail(cause, '加载更多失败');
     } finally {
@@ -171,6 +191,15 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
       onToast(`字段「${property.name}」已锁定，无法修改`, 'error');
       return;
     }
+    const cellKey = cellLockKey(row.id, property.id);
+    // 共享的可编辑用户每个格子只有一次机会：已经改过的格子只读，这里再挡一次
+    // （例如在另一个标签页里刚改过同一个格子）
+    if (lockedCells.has(cellKey)) {
+      onToast(cellLockHint(property.name), 'error');
+      return;
+    }
+    // 值没变就不发请求，也不消耗那一次机会（与服务端的判断保持一致）
+    if (sameCellValue(row.values[property.id], value)) return;
     // optimistic update, then replace with the authoritative record
     setRows((prev) =>
       prev.map((item) => {
@@ -184,6 +213,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
     try {
       const result = await api.updateRecord(row.id, { values: { [property.id]: value ?? null } });
       if (result.record) replaceRow(result.record);
+      // 所有者不受限制；其它可编辑访问者改过之后这个格子就锁上了
+      if (!isOwner) mergeLockedCells([cellKey]);
     } catch (cause) {
       fail(cause, '保存失败');
       replaceRow(row);
@@ -221,6 +252,10 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
 
   const uploadFile = async (row: RowRecord, property: Property, file: File): Promise<FileValue> => {
     if (property.locked) throw new Error(`字段「${property.name}」已锁定，无法上传文件`);
+    // 文件字段属于这个格子的值：改过一次之后也不允许再上传（服务端同样会拒绝）
+    if (lockedCells.has(cellLockKey(row.id, property.id))) {
+      throw new Error(cellLockHint(property.name));
+    }
     const result = await api.uploadFile(file, {
       databaseId: detail.id,
       recordId: row.id,
@@ -633,6 +668,8 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
             onResizeProperty={(property, width) => void resizeProperty(property, width)}
             onSortProperty={addSortFor}
             onFilterProperty={addFilterFor}
+            lockedCells={lockedCells}
+            onOpenRecord={(row) => setOpenRowId(row.id)}
           />
         )}
 
@@ -662,6 +699,7 @@ export function DatabasePage({ database, me, onToast, onReloadList, onClose }: D
           uploadFile={(property, file) => uploadFile(openRow, property, file)}
           onDuplicate={() => void duplicateRows([openRow])}
           onDelete={() => void deleteRows([openRow])}
+          lockedCells={lockedCells}
         />
       ) : null}
 

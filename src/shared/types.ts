@@ -255,6 +255,12 @@ export interface DatabaseDetail {
   total: number;
   hasMore: boolean;
   /**
+   * 当前访问者「已经改过一次」的单元格（键为 `记录 id:字段 id`）。
+   * 共享的可编辑用户每个格子只有一次修改机会：前端据此把这些格子显示成只读，
+   * 表格所有者拿到的永远是空数组（所有者不受限制）。
+   */
+  lockedCells: string[];
+  /**
    * 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名。
    * 定向分享的访问者不是表格成员，只有这份映射才能显示「创建人」的姓名。
    */
@@ -306,4 +312,9 @@ export interface PublicDatabaseResponse {
   hasMore: boolean;
   /** 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名 */
   people: Record<string, string>;
+  /**
+   * 通过该分享链接「已经改过一次」的单元格（键为 `记录 id:字段 id`）。
+   * 可编辑链接的访客每个格子只有一次修改机会，前端据此显示只读。
+   */
+  lockedCells: string[];
 }
