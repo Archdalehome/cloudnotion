@@ -23,6 +23,7 @@ import type {
 import { defaultViewConfig } from '../../shared/views';
 import { conditionConjunction, groupFilterConditions, type Conjunction } from '../../shared/viewFilter';
 import { ApiError, api } from '../api';
+import { useCellEditLocks } from '../lib/cellEditLocks';
 import { applyView, groupRows, visibleProperties } from '../lib/viewEngine';
 import { BoardView, GalleryView } from './CardViews';
 import type { UserNames } from './Cell';
@@ -91,13 +92,11 @@ export function DatabasePage({
   const [nameDraft, setNameDraft] = useState(database.name);
   const [loadingMore, setLoadingMore] = useState(false);
   /**
-   * 当前访问者已经改过一次的格子（`记录 id:字段 id`）。
-   * 只有分享时勾选了「限制编辑」的访问者才有内容（每格只能改一次，改过的格子只读）；
-   * 表格所有者 / 表格成员 / 未勾选「限制编辑」的分享永远是空集合。
+   * 单元格级「限制编辑」的判定器：只有分享时勾选了「限制编辑」的访问者才有内容 ——
+   * 每格只有一次修改机会，但第一次保存成功后的 10 秒内还能重新输入 / 修改（纠错窗口，
+   * 见 `CELL_EDIT_GRACE_MS`）；表格所有者 / 表格成员 / 未勾选「限制编辑」的分享永远是空。
    */
-  const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(
-    () => new Set(database.lockedCells ?? []),
-  );
+  const cellGuard = useCellEditLocks(database);
   /**
    * 别人的改动刚落到本地、需要闪一下的格子（`记录 id:字段 id`）：
    * 让人一眼看出「哪一格有新数据」，FLASH_MS 之后自动清空。
@@ -123,7 +122,7 @@ export function DatabasePage({
     setRows(database.rows);
     setTotal(database.total);
     setHasMore(database.hasMore);
-    setLockedCells(new Set(database.lockedCells ?? []));
+    cellGuard.reset(database);
     setNameDraft(database.name);
     setSelectedRowIds([]);
     setFlashCells(new Set());
@@ -132,7 +131,7 @@ export function DatabasePage({
     setActiveViewId((prev) =>
       prev && database.views.some((view) => view.id === prev) ? prev : database.views[0]?.id ?? null,
     );
-  }, [database]);
+  }, [cellGuard, database]);
 
   const { properties, views, members } = detail;
   const role: Role = detail.role;
@@ -194,16 +193,6 @@ export function DatabasePage({
     [onToast],
   );
 
-  /** 把服务端返回的「已改过一次的格子」并进本地状态（只会增加，不会凭空移除） */
-  const mergeLockedCells = useCallback((keys: string[] | undefined) => {
-    if (!keys?.length) return;
-    setLockedCells((prev) => {
-      const next = new Set(prev);
-      for (const key of keys) next.add(key);
-      return next;
-    });
-  }, []);
-
   /** Re-fetch the first page (used after structural changes). */
   const reload = useCallback(async () => {
     try {
@@ -212,13 +201,13 @@ export function DatabasePage({
       setRows(next.rows);
       setTotal(next.total);
       setHasMore(next.hasMore);
-      mergeLockedCells(next.lockedCells);
+      cellGuard.merge(next);
       // 整表重载后游标跟着新数据走（服务端是先给版本号再给数据，所以不会漏改动）
       revRef.current = next.rev ?? 0;
     } catch (cause) {
       fail(cause, '刷新失败');
     }
-  }, [detail.id, fail, mergeLockedCells]);
+  }, [cellGuard, detail.id, fail]);
 
   const replaceRow = useCallback((record: RowRecord) => {
     setRows((prev) => {
@@ -270,14 +259,14 @@ export function DatabasePage({
         const fresh = await api.syncRecord(recordId);
         replaceRow(fresh.record);
         mergeNotes(fresh.notes);
-        mergeLockedCells(fresh.lockedCells);
+        cellGuard.merge(fresh);
         return true;
       } catch (cause) {
         if (cause instanceof ApiError && cause.status === 404) return false;
         throw cause;
       }
     },
-    [mergeLockedCells, mergeNotes, replaceRow],
+    [cellGuard, mergeNotes, replaceRow],
   );
 
   /**
@@ -462,11 +451,12 @@ export function DatabasePage({
         setDetail((prev) => ({ ...prev, people: { ...prev.people, ...changes.people } }));
       }
       mergeNotes(changes.notes);
-      mergeLockedCells(changes.lockedCells);
+      // 别的访客用掉的格子 / 刚改过、还在 10 秒纠错窗口内的格子
+      cellGuard.merge(changes);
       setTotal(changes.total);
       setHasMore(rowsRef.current.length < changes.total);
     },
-    [flash, mergeLockedCells, mergeNotes, onToast],
+    [cellGuard, flash, mergeNotes, onToast],
   );
 
   /**
@@ -528,7 +518,7 @@ export function DatabasePage({
       setRows((prev) => [...prev, ...page.rows.filter((row) => !prev.some((item) => item.id === row.id))]);
       setTotal(page.total);
       setHasMore(page.hasMore);
-      mergeLockedCells(page.lockedCells);
+      cellGuard.merge(page);
       mergeNotes(page.notes);
     } catch (cause) {
       fail(cause, '加载更多失败');
@@ -559,9 +549,9 @@ export function DatabasePage({
       return;
     }
     const cellKey = cellLockKey(row.id, property.id);
-    // 勾选了「限制编辑」的分享每格只有一次机会：已经改过的格子只读，这里再挡一次
-    // （例如在另一个标签页里刚改过同一个格子）
-    if (lockedCells.has(cellKey)) {
+    // 勾选了「限制编辑」的分享每格只有一次机会：改过、且过了 10 秒纠错窗口的格子只读，
+    // 这里再挡一次（例如在另一个标签页里刚改过同一个格子）
+    if (cellGuard.isSpent(row.id, property.id)) {
       onToast(cellLockHint(property.name), 'error');
       return;
     }
@@ -582,9 +572,13 @@ export function DatabasePage({
     try {
       const result = await api.updateRecord(row.id, { values: { [property.id]: value ?? null } });
       if (result.record) replaceRow(result.record);
-      // 只有勾选了「限制编辑」的访问者改过之后这个格子才锁上
+      // 只有勾选了「限制编辑」的访问者改过之后这个格子才有「一次机会」的约束：
+      // 服务端下发的窗口截止时刻是权威值，本地再记一份好让 10 秒倒计时马上开始
       // （所有者 / 表格成员 / 未勾选的分享可以反复修改）
-      if (detail.limitCellEdits) mergeLockedCells([cellKey]);
+      if (detail.limitCellEdits) {
+        cellGuard.merge(result);
+        cellGuard.markEdited(cellKey);
+      }
     } catch (cause) {
       fail(cause, '保存失败');
       replaceRow(row);
@@ -632,9 +626,9 @@ export function DatabasePage({
 
   const uploadFile = async (row: RowRecord, property: Property, file: File): Promise<FileValue> => {
     if (property.locked) throw new Error(`字段「${property.name}」已锁定，无法上传文件`);
-    // 文件字段属于这个格子的值：勾选了「限制编辑」时改过一次之后也不允许再上传
-    // （服务端同样会拒绝）
-    if (lockedCells.has(cellLockKey(row.id, property.id))) {
+    // 文件字段属于这个格子的值：勾选了「限制编辑」时改过、且过了 10 秒纠错窗口之后
+    // 也不允许再上传（服务端同样会拒绝）
+    if (cellGuard.isSpent(row.id, property.id)) {
       throw new Error(cellLockHint(property.name));
     }
     const result = await api.uploadFile(file, {
@@ -1075,7 +1069,7 @@ export function DatabasePage({
             onResizeProperty={(property, width) => void resizeProperty(property, width)}
             onSortProperty={addSortFor}
             onFilterProperty={addFilterFor}
-            lockedCells={lockedCells}
+            cellGuard={cellGuard}
             flashCells={flashCells}
             onOpenRecord={(row) => openRecord(row.id)}
           />
@@ -1112,7 +1106,7 @@ export function DatabasePage({
           onCommitCell={(property, value) => void commitCell(openRow, property, value)}
           uploadFile={(property, file) => uploadFile(openRow, property, file)}
           onAddNote={(body, mentions) => addNote(openRow, body, mentions)}
-          lockedCells={lockedCells}
+          cellGuard={cellGuard}
         />
       ) : null}
 

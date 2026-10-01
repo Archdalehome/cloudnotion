@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FIELD_META, cellLockKey } from '../../shared/fields';
 import type { CellValue, FileValue, Property, RowRecord, SortRule, ViewConfig } from '../../shared/types';
+import type { CellEditGuard } from '../lib/cellEditLocks';
 import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
 import { Popover } from './Popover';
 
@@ -46,10 +47,10 @@ interface TableGridProps {
   onSortProperty: (property: Property, direction: 'asc' | 'desc') => void;
   onFilterProperty: (property: Property) => void;
   /**
-   * 当前访问者已经改过一次的格子（`记录 id:字段 id`）：共享给可编辑成员 / 公开链接时
-   * 每个格子只有一次修改机会，改过的格子只读。所有者访问时为空集合。
+   * 单元格级「限制编辑」的判定器：共享给可编辑成员 / 公开链接时每个格子只有一次
+   * 修改机会，改过且过了 10 秒纠错窗口的格子只读；所有者访问时不受限制。
    */
-  lockedCells: ReadonlySet<string>;
+  cellGuard: CellEditGuard;
   /**
    * 别人刚改过、需要短暂高亮的格子（`记录 id:字段 id`），由增量同步写入。
    * 不传就不高亮（例如公开链接页的只读表格）。
@@ -200,7 +201,7 @@ export function TableGrid(props: TableGridProps) {
     sortRule,
     onAddProperty,
     onResizeProperty,
-    lockedCells,
+    cellGuard,
     flashCells,
     onOpenRecord,
   } = props;
@@ -368,8 +369,9 @@ export function TableGrid(props: TableGridProps) {
               {properties.map((property, index) => {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
                 const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
-                /** 共享的可编辑用户每个格子只有一次机会，已经用掉的格子只读 */
-                const spent = lockedCells.has(cellLockKey(row.id, property.id));
+                /** 共享的可编辑用户每个格子只有一次机会；10 秒纠错窗口内还能再改 */
+                const spent = cellGuard.isSpent(row.id, property.id);
+                const graceMsLeft = cellGuard.graceLeftMs(row.id, property.id);
                 /** 别人刚改过这一格：闪一下，方便一眼看出哪儿有新数据 */
                 const flash = flashCells?.has(cellLockKey(row.id, property.id)) ?? false;
                 /** 首列（PO# 等标题列）承载「打开记录卡片」的小按钮 */
@@ -399,6 +401,7 @@ export function TableGrid(props: TableGridProps) {
                         users={users}
                         editable={editable}
                         spent={spent}
+                        graceMsLeft={graceMsLeft}
                         flash={flash}
                         onEdit={() => setEditing({ rowId: row.id, propertyId: property.id })}
                         onQuickChange={(value) => onCommitCell(row, property, value)}

@@ -240,8 +240,22 @@ export function hasDefaultStatus(property: Pick<Property, 'type'>): boolean {
 }
 
 /**
+ * 单元格级「限制编辑」的纠错窗口（毫秒）：共享出来的可编辑访问者对每一格只有
+ * 一次修改机会，但第一次保存成功后的这段时间内还允许重新输入 / 修改 ——
+ * 给人一个「刚填完就发现写错了」的改正机会。
+ *
+ * 窗口从**第一次保存成功**的时刻起算，不因为窗口内的再次修改而延长：
+ * 10 秒一到这一格就彻底只读，只能请表格所有者代改。
+ *
+ * Worker 用它判断某格是否已经锁上（`worker/cellEdits.ts`），客户端用它做本地
+ * 倒计时（`client/lib/cellEditLocks.ts`），两边必须保持一致。
+ */
+export const CELL_EDIT_GRACE_MS = 10_000;
+
+/**
  * 单元格级锁定的键：`记录 id:字段 id`。
- * Worker 用同样的拼法生成 `lockedCells`，客户端据此判断某个格子是否已经改过。
+ * Worker 用同样的拼法生成 `lockedCells` / `cellEditGrace`，
+ * 客户端据此判断某个格子是否已经改过、还能不能改。
  */
 export function cellLockKey(recordId: string, propertyId: string): string {
   return `${recordId}:${propertyId}`;
@@ -252,6 +266,17 @@ export function cellLockHint(name?: string): string {
   return name
     ? `「${name}」这条记录你已经改过一次了，如需再次修改请联系表格所有者`
     : '这个格子你已经改过一次了，如需再次修改请联系表格所有者';
+}
+
+/**
+ * 纠错窗口内的提示文案：告诉访问者这一格刚刚保存过，但窗口还没关、还能再改
+ * （`msLeft` 是窗口剩余毫秒）。窗口一过就换成 {@link cellLockHint}。
+ */
+export function cellGraceHint(name: string | undefined, msLeft: number): string {
+  const seconds = Math.max(1, Math.ceil(msLeft / 1000));
+  return name
+    ? `「${name}」刚刚保存过，${seconds} 秒内还可以再修改`
+    : `这个格子刚刚保存过，${seconds} 秒内还可以再修改`;
 }
 
 function canonicalValue(value: unknown): string {

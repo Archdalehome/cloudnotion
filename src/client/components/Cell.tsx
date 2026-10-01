@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  cellGraceHint,
   cellLockHint,
   formatDateValue,
   formatTimestamp,
@@ -48,10 +49,15 @@ interface CellViewProps {
   /** 这个格子是否允许编辑（访问权 + 字段锁 + 字段类型都会影响它） */
   editable: boolean;
   /**
-   * 该格子已经被当前访问者改过一次（共享的可编辑用户每个格子只有一次机会）。
-   * 为真时呈现为只读并给出提示，单击也不会进入编辑。
+   * 该格子已经被当前访问者改过一次、且 10 秒纠错窗口已经关了（共享的可编辑用户
+   * 每个格子只有一次机会）。为真时呈现为只读并给出提示，单击也不会进入编辑。
    */
   spent?: boolean;
+  /**
+   * 这一格还在纠错窗口内时窗口的剩余毫秒数（> 0 = 刚刚保存过，窗口内还能再改）。
+   * 悬停提示里会带上倒计时的秒数。
+   */
+  graceMsLeft?: number;
   /**
    * 别人刚改过这个格子（增量同步带回来的）：短暂高亮一下，
    * 让人一眼看出「哪一格有新数据」。
@@ -62,7 +68,17 @@ interface CellViewProps {
   onQuickChange?: (next: CellValue | undefined) => void;
 }
 
-export function CellView({ property, row, users, editable, spent, flash, onEdit, onQuickChange }: CellViewProps) {
+export function CellView({
+  property,
+  row,
+  users,
+  editable,
+  spent,
+  graceMsLeft,
+  flash,
+  onEdit,
+  onQuickChange,
+}: CellViewProps) {
   const value = row.values[property.id];
 
   if (property.type === 'created_time' || property.type === 'updated_time' || property.type === 'created_by' || property.type === 'updated_by') {
@@ -142,7 +158,10 @@ export function CellView({ property, row, users, editable, spent, flash, onEdit,
       // 「已改过一次」的格子保持可悬停（这样才看得到提示），但点击不再进入编辑
       disabled={!editable && !spent}
       aria-disabled={startable ? undefined : true}
-      title={spent ? cellLockHint(property.name) : undefined}
+      // 还在 10 秒纠错窗口里：提示「还能再改几秒」；窗口一关换成「联系表格所有者」
+      title={
+        spent ? cellLockHint(property.name) : graceMsLeft ? cellGraceHint(property.name, graceMsLeft) : undefined
+      }
       // 单击它就会开始编辑这个单元格：调用方的「点别处退出输入」据此放行，
       // 否则新单元格的编辑框刚打开就会被关掉（勾选类字段是就地切换，不算）
       data-start-edit={startable && !(property.type === 'checkbox' && onQuickChange) ? 'true' : undefined}

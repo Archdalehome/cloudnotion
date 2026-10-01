@@ -18,7 +18,7 @@
  */
 import { rowMatchesView } from '../shared/viewFilter';
 import type { DatabaseChanges, Property, RowRecord, ViewDef } from '../shared/types';
-import { loadLockedCellKeys } from './cellEdits';
+import { loadCellEditLocks } from './cellEdits';
 import { sqlNumber, sqlString, type SqlRow } from './http';
 import { propertyFromRow, recordFromRow, viewFromRow } from './mappers';
 import { loadNotes } from './notes';
@@ -48,7 +48,7 @@ function placeholders(count: number): string {
 }
 
 function emptyChanges(rev: number): DatabaseChanges {
-  return { rev, reset: true, rows: [], deleted: [], notes: [], lockedCells: [], people: {}, total: 0 };
+  return { rev, reset: true, rows: [], deleted: [], notes: [], lockedCells: [], cellEditGrace: {}, people: {}, total: 0 };
 }
 
 /** 当前（全局）版本号。客户端第一次打开表格时拿它当起点。 */
@@ -157,7 +157,8 @@ export async function loadChanges(
     loadNotes(env, [...notedRows]),
     countRecords(env, databaseId),
   ]);
-  const lockedCells = await loadLockedCellKeys(
+  // 这一轮改动里的单元格锁定状态：彻底只读的格子 + 还在 10 秒纠错窗口内的格子
+  const cellLocks = await loadCellEditLocks(
     env,
     databaseId,
     scope.editorKey,
@@ -169,7 +170,7 @@ export async function loadChanges(
     rows,
     deleted: [...deletedRows],
     notes,
-    lockedCells,
+    ...cellLocks,
     people: await loadPeopleNames(env, rows),
     total,
   };

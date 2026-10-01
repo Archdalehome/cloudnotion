@@ -6,7 +6,7 @@ import { requireUser } from '../auth';
 import {
   assertCellsEditable,
   changedPropertyIds,
-  loadLockedCellKeys,
+  loadCellEditLocks,
   memberCellEditKey,
   rememberCellEdits,
 } from '../cellEdits';
@@ -240,6 +240,9 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
   return json({
     record: await loadRecord(ctx.env, ctx.params.id),
     total: await countRecords(ctx.env, access.databaseId),
+    // 受限访问者（勾了「限制编辑」的分享）拿到这一行最新的锁定状态：
+    // cellEditGrace 给出这次改过的格子 10 秒纠错窗口的截止时刻
+    ...(await loadCellEditLocks(ctx.env, access.databaseId, editorKey, [ctx.params.id])),
   });
 }
 
@@ -316,7 +319,8 @@ async function pageHandler(ctx: RequestContext): Promise<Response> {
     loadRecords(ctx.env, ctx.params.id, limit, offset),
     countRecords(ctx.env, ctx.params.id),
   ]);
-  const lockedCells = await loadLockedCellKeys(
+  // 已经过了纠错窗口的格子 + 还在 10 秒窗口内的格子（不受限制的访问者恒为空）
+  const cellLocks = await loadCellEditLocks(
     ctx.env,
     ctx.params.id,
     memberCellEditKey(access),
@@ -327,7 +331,7 @@ async function pageHandler(ctx: RequestContext): Promise<Response> {
     ctx.env,
     rows.map((row) => row.id),
   );
-  return json({ rows, total, hasMore: offset + rows.length < total, lockedCells, notes });
+  return json({ rows, total, hasMore: offset + rows.length < total, ...cellLocks, notes });
 }
 
 /**
@@ -343,11 +347,11 @@ async function syncRecordHandler(ctx: RequestContext): Promise<Response> {
   const access = await accessForRecord(ctx.env, ctx.params.id, user, 'view');
   const record = await loadRecord(ctx.env, access.recordId);
   if (!record) throw notFound('记录不存在');
-  const [notes, lockedCells] = await Promise.all([
+  const [notes, cellLocks] = await Promise.all([
     loadNotes(ctx.env, [access.recordId]),
-    loadLockedCellKeys(ctx.env, access.databaseId, memberCellEditKey(access), [access.recordId]),
+    loadCellEditLocks(ctx.env, access.databaseId, memberCellEditKey(access), [access.recordId]),
   ]);
-  return json({ record, notes, lockedCells });
+  return json({ record, notes, ...cellLocks });
 }
 
 export const recordRoutes: Route[] = [

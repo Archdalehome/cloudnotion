@@ -251,7 +251,7 @@ function NewViewForm({
                 onChange={(event) => setLimitEdits(event.target.checked)}
               />
               <span className="small">
-                限制编辑：被分享者对每个格子只有一次输入机会，改过之后该格子只能查看
+                限制编辑：被分享者对每个格子只有一次输入机会（保存成功后 10 秒内还能改回来），之后该格子只能查看
               </span>
             </label>
           ) : null}

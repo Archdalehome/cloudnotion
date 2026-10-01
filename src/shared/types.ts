@@ -283,6 +283,28 @@ export interface InboxResponse {
   unread: number;
 }
 
+/* --------------------------------------------------------------- cell lock */
+
+/**
+ * 单元格级「限制编辑」的当前状态：彻底只读的格子 + 还在纠错窗口内的格子。
+ *
+ * 只有勾选了「限制编辑」的访问者（公开分享链接 / 视图定向分享）才有内容：
+ * - 某格第一次保存成功后进入 10 秒纠错窗口（`CELL_EDIT_GRACE_MS`），窗口内还能
+ *   重新输入或修改；
+ * - 窗口一过这一格就彻底只读（列进 `lockedCells`），只能请表格所有者代改。
+ *
+ * 表格所有者、表格成员、以及没勾选「限制编辑」的分享拿到的永远是空的。
+ */
+export interface CellEditLocks {
+  /** 已经改过、且过了纠错窗口（彻底只读）的格子：键为 `记录 id:字段 id` */
+  lockedCells: string[];
+  /**
+   * 还在纠错窗口内的格子：键为 `记录 id:字段 id`，值为窗口截止时刻（epoch ms）。
+   * 客户端据此倒计时（窗口一到该格自动变只读）；服务端始终是权威判断。
+   */
+  cellEditGrace: Record<string, number>;
+}
+
 /* -------------------------------------------------------------- databases */
 
 export interface DatabaseSummary {
@@ -304,7 +326,7 @@ export interface DatabaseSummary {
   rowCount?: number;
 }
 
-export interface DatabaseDetail {
+export interface DatabaseDetail extends CellEditLocks {
   id: string;
   name: string;
   icon: string;
@@ -338,12 +360,6 @@ export interface DatabaseDetail {
   total: number;
   hasMore: boolean;
   /**
-   * 当前访问者「已经改过一次」的单元格（键为 `记录 id:字段 id`）。
-   * 只有分享时勾选了「限制编辑」的访问者才有内容：前端据此把这些格子显示成只读。
-   * 表格所有者、表格成员、以及没勾选「限制编辑」的分享拿到的永远是空数组。
-   */
-  lockedCells: string[];
-  /**
    * 当前这一页记录上的备注（评论），按 `createdAt` 升序。
    * 备注只能新增，不能修改 / 删除（服务端没有对应的接口）。
    */
@@ -364,7 +380,7 @@ export interface DatabaseDetail {
  * 只把「有更新的单元格 / 新记录 / 被删掉的行 / 新备注」合并进本地状态，
  * 所以别人改数据不用刷新页面就能看到，也不用整表重拉。
  */
-export interface DatabaseChanges {
+export interface DatabaseChanges extends CellEditLocks {
   /** 服务端当前的版本号：下次请求带上它，就只看更新的改动 */
   rev: number;
   /**
@@ -378,8 +394,6 @@ export interface DatabaseChanges {
   deleted: string[];
   /** 这些记录上新加的备注（备注只增不改，可以直接合并） */
   notes: RecordNote[];
-  /** 当前访问者已经用掉的格子（「限制编辑」才有内容） */
-  lockedCells: string[];
   /** 行元数据里出现过的用户 id → 显示名（别人的改动可能带来本地没有的姓名） */
   people: Record<string, string>;
   /** 表格当前的记录总数 */
@@ -413,7 +427,7 @@ export interface DatabaseListResponse {
   maxUploadMb: number;
 }
 
-export interface PublicDatabaseResponse {
+export interface PublicDatabaseResponse extends CellEditLocks {
   database: {
     id: string;
     name: string;
@@ -438,9 +452,4 @@ export interface PublicDatabaseResponse {
   rev: number;
   /** 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名 */
   people: Record<string, string>;
-  /**
-   * 通过该分享链接「已经改过一次」的单元格（键为 `记录 id:字段 id`）。
-   * 链接勾选了「限制编辑」时才有内容，前端据此显示只读。
-   */
-  lockedCells: string[];
 }

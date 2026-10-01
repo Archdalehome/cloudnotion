@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { ApiError } from '../api';
-import { FIELD_META, cellLockHint, cellLockKey } from '../../shared/fields';
+import { FIELD_META, cellLockHint } from '../../shared/fields';
 import type { CellValue, FileValue, Member, Property, RecordNote, RowRecord } from '../../shared/types';
+import type { CellEditGuard } from '../lib/cellEditLocks';
 import { formatDateTime, formatRelativeTime } from '../lib/time';
 import { CellEditor, CellView, computedText, useCloseOnOutsideClick, type UserNames } from './Cell';
 import { Modal } from './Modal';
@@ -22,8 +23,11 @@ interface RecordDialogProps {
   uploadFile: (property: Property, file: File) => Promise<FileValue>;
   /** 添加一条备注；`mentions` 是被 @ 到的用户 id，用来给他们发私信 */
   onAddNote: (body: string, mentions: string[]) => Promise<void>;
-  /** 当前访问者已经改过一次的格子（`记录 id:字段 id`），只读并给出提示 */
-  lockedCells: ReadonlySet<string>;
+  /**
+   * 单元格级「限制编辑」的判定器：改过、且已经过了 10 秒纠错窗口的格子只读并给出
+   * 提示；窗口内的格子还能再改（`cellGuard.graceLeftMs()` 给出剩余毫秒）。
+   */
+  cellGuard: CellEditGuard;
 }
 
 /** Full-record card opened from 打开 / board / gallery cards. */
@@ -39,7 +43,7 @@ export function RecordDialog({
   onCommitCell,
   uploadFile,
   onAddNote,
-  lockedCells,
+  cellGuard,
 }: RecordDialogProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const notesRef = useRef<HTMLDivElement>(null);
@@ -61,8 +65,8 @@ export function RecordDialog({
         {properties.map((property) => {
           // 字段级锁定：锁定字段只读，内容照常显示
           const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
-          /** 共享的可编辑用户每个格子只有一次机会，已经用掉的格子只读 */
-          const spent = lockedCells.has(cellLockKey(row.id, property.id));
+          /** 共享的可编辑用户每个格子只有一次机会；10 秒纠错窗口内还能再改 */
+          const spent = cellGuard.isSpent(row.id, property.id);
           const editing = editingId === property.id;
           return (
             <div className="row gap" key={property.id}>
@@ -97,6 +101,7 @@ export function RecordDialog({
                     users={users}
                     editable={editable}
                     spent={spent}
+                    graceMsLeft={cellGuard.graceLeftMs(row.id, property.id)}
                     onEdit={() => setEditingId(property.id)}
                     onQuickChange={(value) => onCommitCell(property, value)}
                   />

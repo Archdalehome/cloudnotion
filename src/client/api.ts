@@ -3,6 +3,7 @@
  * Session handling relies on the HttpOnly cookie, hence `credentials: 'same-origin'`.
  */
 import type {
+  CellEditLocks,
   DatabaseChanges,
   DatabaseDetail,
   DatabaseSummary,
@@ -27,23 +28,19 @@ export interface SessionPayload {
   appName: string;
 }
 
-export interface RecordsPage {
+export interface RecordsPage extends CellEditLocks {
   rows: RowRecord[];
   total: number;
   hasMore: boolean;
-  /** 当前访问者已经改过一次的格子（`记录 id:字段 id`）；所有者恒为空 */
-  lockedCells: string[];
   /** 这一页记录上的备注（备注只增不改，可以直接合并进本地列表） */
   notes: RecordNote[];
 }
 
 /** 单条记录的最新状态：记录卡片打开 / 定时同步用（比整表分页轻） */
-export interface RecordSync {
+export interface RecordSync extends CellEditLocks {
   record: RowRecord;
   /** 这条记录上的备注，按 `createdAt` 升序 */
   notes: RecordNote[];
-  /** 当前访问者在这条记录上已经改过一次的格子（`记录 id:字段 id`） */
-  lockedCells: string[];
 }
 
 export interface UploadResult {
@@ -169,8 +166,13 @@ export const api = {
     }),
   deleteRecords: (databaseId: string, recordIds: string[]) =>
     json<{ deleted: number; total: number }>(`/api/databases/${databaseId}/records/delete`, 'POST', { recordIds }),
+  /**
+   * 保存一个单元格 / 一整行。受限访问者（勾了「限制编辑」的分享）的响应里还会带上
+   * 这一行的锁定状态：`cellEditGrace` 给出本次改动的格子 10 秒纠错窗口的截止时刻，
+   * 客户端据此显示「还能再改几秒」。
+   */
   updateRecord: (id: string, body: { values?: RowValues; position?: number }) =>
-    json<{ record: RowRecord | null; total: number }>(`/api/records/${id}`, 'PATCH', body),
+    json<{ record: RowRecord | null; total: number } & CellEditLocks>(`/api/records/${id}`, 'PATCH', body),
   deleteRecord: (id: string) => json<{ ok: true; total: number }>(`/api/records/${id}`, 'DELETE'),
 
   /**
@@ -245,10 +247,13 @@ export const publicApi = {
     ),
   createRecord: (token: string, values: RowValues) =>
     json<{ record: RowRecord | null }>(`/api/public/${encodeURIComponent(token)}/records`, 'POST', { values }),
+  /** 公开链接页保存单元格：响应里的 `cellEditGrace` 给出 10 秒纠错窗口的截止时刻 */
   updateRecord: (token: string, recordId: string, values: RowValues) =>
-    json<{ record: RowRecord | null }>(`/api/public/${encodeURIComponent(token)}/records/${recordId}`, 'PATCH', {
-      values,
-    }),
+    json<{ record: RowRecord | null } & CellEditLocks>(
+      `/api/public/${encodeURIComponent(token)}/records/${recordId}`,
+      'PATCH',
+      { values },
+    ),
   deleteRecord: (token: string, recordId: string) =>
     json<{ ok: true }>(`/api/public/${encodeURIComponent(token)}/records/${recordId}`, 'DELETE'),
 };

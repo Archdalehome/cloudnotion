@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FIELD_META, cellLockHint, cellLockKey, sameCellValue } from '../../shared/fields';
 import type { CellValue, DatabaseChanges, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
+import { useCellEditLocks } from '../lib/cellEditLocks';
 import { applyView, visibleProperties } from '../lib/viewEngine';
 import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
 
@@ -23,11 +24,11 @@ export function PublicPage({ token }: PublicPageProps) {
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
   /**
-   * 分享链接里已经被改过一次的格子（`记录 id:字段 id`）。
-   * 只有创建链接时勾选了「限制编辑」才有内容：每格只有一次机会，谁先改谁用掉，
-   * 之后所有通过该链接访问的人都只能看。
+   * 单元格级「限制编辑」的判定器。只有创建链接时勾选了「限制编辑」才有内容：
+   * 每格只有一次机会（谁先改谁用掉），但第一次保存成功后的 10 秒内还能重新输入 /
+   * 修改（纠错窗口），窗口一过所有通过该链接访问的人都只能看。
    */
-  const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(() => new Set());
+  const cellGuard = useCellEditLocks();
 
   // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
   useCloseOnOutsideClick(editing !== null, () => setEditing(null));
@@ -45,11 +46,11 @@ export function PublicPage({ token }: PublicPageProps) {
     const data = await publicApi.database(token, { limit: 200 });
     setPayload(data);
     setRows(data.rows);
-    setLockedCells(new Set(data.lockedCells ?? []));
+    cellGuard.reset(data);
     setActiveViewId(data.views[0]?.id ?? null);
     revRef.current = data.rev ?? 0;
     setError('');
-  }, [token]);
+  }, [cellGuard, token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,15 +78,10 @@ export function PublicPage({ token }: PublicPageProps) {
       for (const record of changes.rows) byId.set(record.id, record);
       setRows([...byId.values()].sort((a, b) => a.position - b.position));
     }
-    if (changes.lockedCells.length) {
-      setLockedCells((prev) => {
-        const next = new Set(prev);
-        for (const key of changes.lockedCells) next.add(key);
-        return next;
-      });
-    }
+    // 别的访客用掉的格子 / 刚改过、还在 10 秒纠错窗口内的格子
+    cellGuard.merge(changes);
     setPayload((prev) => (prev ? { ...prev, total: changes.total } : prev));
-  }, []);
+  }, [cellGuard]);
 
   /**
    * 增量同步：每隔几秒问一次服务端「比我看过的版本号新的是什么」。
@@ -168,9 +164,9 @@ export function PublicPage({ token }: PublicPageProps) {
     async (row: RowRecord, property: Property, value: CellValue | undefined) => {
       if (!canEdit) return;
       const cellKey = cellLockKey(row.id, property.id);
-      // 勾选了「限制编辑」的链接每格只有一次机会：已经改过的格子只读，这里再挡一次
-      // （例如在另一个标签页里改过）
-      if (lockedCells.has(cellKey)) {
+      // 勾选了「限制编辑」的链接每格只有一次机会：改过、且过了 10 秒纠错窗口的格子只读，
+      // 这里再挡一次（例如在另一个标签页里改过）
+      if (cellGuard.isSpent(row.id, property.id)) {
         setError(cellLockHint(property.name));
         return;
       }
@@ -191,7 +187,11 @@ export function PublicPage({ token }: PublicPageProps) {
         if (result.record) {
           setRows((prev) => prev.map((item) => (item.id === result.record!.id ? result.record! : item)));
         }
-        if (limitEdits) setLockedCells((prev) => new Set(prev).add(cellKey));
+        if (limitEdits) {
+          // 服务端下发的窗口截止时刻是权威值；本地也立刻记上，好让 10 秒倒计时马上开始
+          cellGuard.merge(result);
+          cellGuard.markEdited(cellKey);
+        }
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : '保存失败');
         setRows((prev) => prev.map((item) => (item.id === row.id ? row : item)));
@@ -199,7 +199,7 @@ export function PublicPage({ token }: PublicPageProps) {
         release();
       }
     },
-    [beginWrite, canEdit, limitEdits, lockedCells, token],
+    [beginWrite, canEdit, cellGuard, limitEdits, token],
   );
 
   const createRow = useCallback(async () => {
@@ -265,7 +265,7 @@ export function PublicPage({ token }: PublicPageProps) {
 
       {payload.database.description ? <p className="muted small share-desc">{payload.database.description}</p> : null}
       {canEdit && limitEdits ? (
-        <p className="muted small share-desc">该链接已开启「限制编辑」：每个格子只能修改一次，改过之后只能查看。</p>
+        <p className="muted small share-desc">该链接已开启「限制编辑」：每个格子只能修改一次（保存成功后 10 秒内还能改回来），之后只能查看。</p>
       ) : null}
       {error ? <p className="error small share-desc">{error}</p> : null}
 
@@ -337,7 +337,8 @@ export function PublicPage({ token }: PublicPageProps) {
                           row={row}
                           users={users}
                           editable={editable}
-                          spent={lockedCells.has(cellLockKey(row.id, property.id))}
+                          spent={cellGuard.isSpent(row.id, property.id)}
+                          graceMsLeft={cellGuard.graceLeftMs(row.id, property.id)}
                           onEdit={() => setEditing({ rowId: row.id, propertyId: property.id })}
                           onQuickChange={(value) => void commitCell(row, property, value)}
                         />

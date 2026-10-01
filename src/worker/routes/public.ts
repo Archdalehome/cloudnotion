@@ -4,7 +4,7 @@ import { resolveShareToken, type ShareAccess } from '../access';
 import {
   assertCellsEditable,
   changedPropertyIds,
-  loadLockedCellKeys,
+  loadCellEditLocks,
   rememberCellEdits,
   shareCellEditKey,
 } from '../cellEdits';
@@ -61,8 +61,8 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
   ]);
   // 公开链接也要能显示「创建人 / 最后编辑人」的姓名（表格所有者 + 协作者）
   const people = await loadPeopleNames(ctx.env, rows);
-  // 通过该分享链接已经改过一次的格子（勾选了「限制编辑」的可编辑链接才有）
-  const lockedCells = await loadLockedCellKeys(
+  // 通过该分享链接改过的格子：彻底只读的 + 还在 10 秒纠错窗口内的（勾了「限制编辑」才有）
+  const cellLocks = await loadCellEditLocks(
     ctx.env,
     share.databaseId,
     shareCellEditKey(share),
@@ -88,7 +88,8 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     hasMore: offset + rows.length < total,
     rev,
     people,
-    lockedCells,
+    // 彻底只读的格子 + 还在 10 秒纠错窗口内的格子
+    ...cellLocks,
   };
   return json(payload);
 }
@@ -173,7 +174,9 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
   const updated = await ctx.env.DB.prepare('SELECT * FROM records WHERE id = ?')
     .bind(ctx.params.recordId)
     .first<SqlRow>();
-  return json({ record: updated ? recordFromRow(updated) : null });
+  // 这一行最新的锁定状态：cellEditGrace = 刚改过的格子 10 秒纠错窗口的截止时刻
+  const cellLocks = await loadCellEditLocks(ctx.env, share.databaseId, editorKey, [ctx.params.recordId]);
+  return json({ record: updated ? recordFromRow(updated) : null, ...cellLocks });
 }
 
 async function publicDeleteRecordHandler(ctx: RequestContext): Promise<Response> {

@@ -90,6 +90,14 @@ function textOf(value) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/** 与 `src/shared/fields.ts` 的 `CELL_EDIT_GRACE_MS` 保持一致：单元格纠错窗口 10 秒 */
+const CELL_EDIT_GRACE_MS = 10_000;
+
+/** 等一次单元格纠错窗口过期（多留 1.2 秒余量，避免边界抖动） */
+function waitForGraceWindow() {
+  return new Promise((resolve) => setTimeout(resolve, CELL_EDIT_GRACE_MS + 1_200));
+}
+
 async function main() {
   section(`CloudNotion smoke test -> ${BASE}`);
   const alive = await waitForServer();
@@ -526,23 +534,43 @@ async function main() {
   });
   check('editable link updates a row', publicPatch.data?.record?.values?.[titleProperty.id] === '公开链接已更新');
 
-  // 共享出去的访客每个格子只有一次修改机会（同一条链接的访客共用这个机会）
+  // 每格一次机会，但第一次保存成功后的 10 秒内还能改回来（纠错窗口）
   const publicSecondEdit = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
     method: 'PATCH',
     cookie: false,
-    body: { values: { [titleProperty.id]: '第二次修改应被拒绝' } },
+    body: { values: { [titleProperty.id]: '窗口内改回来' } },
   });
   check(
-    'editable link cannot change the same cell twice',
-    publicSecondEdit.status === 403,
+    'a cell stays editable inside the 10s grace window',
+    publicSecondEdit.status === 200 &&
+      publicSecondEdit.data?.record?.values?.[titleProperty.id] === '窗口内改回来',
     `status=${publicSecondEdit.status} err=${publicSecondEdit.data?.error?.message ?? ''}`,
   );
+  check(
+    'the PATCH payload opens a window instead of locking the cell',
+    Number(publicSecondEdit.data?.cellEditGrace?.[`${publicRecordId}:${titleProperty.id}`]) > Date.now() &&
+      (publicSecondEdit.data?.lockedCells ?? []).length === 0,
+    `cellEditGrace=${textOf(publicSecondEdit.data?.cellEditGrace)} lockedCells=${textOf(publicSecondEdit.data?.lockedCells)}`,
+  );
 
-  // 提交的值没变不算改动，不会白白消耗那次机会
+  // 窗口从第一次保存成功算起，不因窗口内的修改而延长：等满 10 秒再改就该被拒
+  await waitForGraceWindow();
+  const publicAfterGraceEdit = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
+    method: 'PATCH',
+    cookie: false,
+    body: { values: { [titleProperty.id]: '窗口已过，应被拒绝' } },
+  });
+  check(
+    'once the grace window closes the same cell is refused',
+    publicAfterGraceEdit.status === 403,
+    `status=${publicAfterGraceEdit.status} err=${publicAfterGraceEdit.data?.error?.message ?? ''}`,
+  );
+
+  // 提交的值没变不算改动，不会白白消耗那次机会（这一格的窗口已经关了也一样放行）
   const publicNoopEdit = await call(`/api/public/${editToken}/records/${publicRecordId}`, {
     method: 'PATCH',
     cookie: false,
-    body: { values: { [titleProperty.id]: '公开链接已更新' } },
+    body: { values: { [titleProperty.id]: '窗口内改回来' } },
   });
   check(
     'an unchanged value does not spend the one-shot chance',
@@ -563,11 +591,13 @@ async function main() {
 
   const publicAfterEdits = await call(`/api/public/${editToken}`, { cookie: false });
   const lockedAfterEdits = publicAfterEdits.data?.lockedCells ?? [];
+  const graceAfterEdits = publicAfterEdits.data?.cellEditGrace ?? {};
   check(
-    'the public payload lists the cells this link already used up',
+    'the public payload locks the spent cell and keeps the fresh one in its window',
     lockedAfterEdits.includes(`${publicRecordId}:${titleProperty.id}`) &&
-      lockedAfterEdits.includes(`${publicRecordId}:${numberProperty?.id}`),
-    `lockedCells=${textOf(lockedAfterEdits)}`,
+      Number(graceAfterEdits[`${publicRecordId}:${numberProperty?.id}`]) > Date.now() &&
+      !Object.keys(graceAfterEdits).includes(`${publicRecordId}:${titleProperty.id}`),
+    `lockedCells=${textOf(lockedAfterEdits)} cellEditGrace=${textOf(Object.keys(graceAfterEdits))}`,
   );
 
   // 没勾选「限制编辑」的可编辑链接：同一个格子可以反复修改，也不会有锁定标记
@@ -603,9 +633,11 @@ async function main() {
 
   const freePayload = await call(`/api/public/${freeShare?.token}`, { cookie: false });
   check(
-    'an unlimited edit link reports no locked cells',
-    freePayload.data?.database?.limitEdits === false && (freePayload.data?.lockedCells ?? []).length === 0,
-    `limitEdits=${freePayload.data?.database?.limitEdits} lockedCells=${textOf(freePayload.data?.lockedCells)}`,
+    'an unlimited edit link reports no locked cells and no grace window',
+    freePayload.data?.database?.limitEdits === false &&
+      (freePayload.data?.lockedCells ?? []).length === 0 &&
+      Object.keys(freePayload.data?.cellEditGrace ?? {}).length === 0,
+    `limitEdits=${freePayload.data?.database?.limitEdits} lockedCells=${textOf(freePayload.data?.lockedCells)} cellEditGrace=${textOf(freePayload.data?.cellEditGrace)}`,
   );
 
   if (freeShare) {
@@ -1097,7 +1129,8 @@ async function main() {
     `rows=${guestMine.data?.rows?.length ?? 0} createdBy=${mineRow?.createdBy ?? ''} member=${memberId ?? ''}`,
   );
 
-  // 共享出来的 editor（视图定向分享）勾了「限制编辑」时每格只有一次修改机会
+  // 共享出来的 editor（视图定向分享）勾了「限制编辑」时每格只有一次修改机会，
+  // 但第一次保存成功后的 10 秒内还能改回来（纠错窗口）
   const guestCellEdit = await call(`/api/records/${mineId}`, {
     method: 'PATCH',
     body: { values: { [titleProperty.id]: '@me 自建记录（改）' } },
@@ -1110,19 +1143,35 @@ async function main() {
 
   const guestCellEditAgain = await call(`/api/records/${mineId}`, {
     method: 'PATCH',
-    body: { values: { [titleProperty.id]: '@me 自建记录（再改）' } },
+    body: { values: { [titleProperty.id]: '@me 自建记录（窗口内改回来）' } },
   });
   check(
-    'a shared editor cannot edit the same cell twice',
-    guestCellEditAgain.status === 403,
+    'a shared editor may still correct the cell inside the grace window',
+    guestCellEditAgain.status === 200 &&
+      guestCellEditAgain.data?.record?.values?.[titleProperty.id] === '@me 自建记录（窗口内改回来）' &&
+      Number(guestCellEditAgain.data?.cellEditGrace?.[`${mineId}:${titleProperty.id}`]) > Date.now(),
     `status=${guestCellEditAgain.status} err=${guestCellEditAgain.data?.error?.message ?? ''}`,
   );
 
+  // 窗口一过这一格彻底只读：再改被拒，列表里也列进 lockedCells
+  await waitForGraceWindow();
+  const guestCellEditExpired = await call(`/api/records/${mineId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '@me 自建记录（窗口已过）' } },
+  });
+  check(
+    'a shared editor cannot edit the same cell twice after the window closed',
+    guestCellEditExpired.status === 403,
+    `status=${guestCellEditExpired.status} err=${guestCellEditExpired.data?.error?.message ?? ''}`,
+  );
+
   const guestRows = await call(`/api/databases/${databaseId}/rows?limit=50`);
+  const guestGraceKeys = Object.keys(guestRows.data?.cellEditGrace ?? {});
   check(
     'the guest rows payload marks the spent cell',
-    (guestRows.data?.lockedCells ?? []).includes(`${mineId}:${titleProperty.id}`),
-    `lockedCells=${textOf(guestRows.data?.lockedCells)}`,
+    (guestRows.data?.lockedCells ?? []).includes(`${mineId}:${titleProperty.id}`) &&
+      !guestGraceKeys.includes(`${mineId}:${titleProperty.id}`),
+    `lockedCells=${textOf(guestRows.data?.lockedCells)} cellEditGrace=${textOf(guestGraceKeys)}`,
   );
 
   check(
