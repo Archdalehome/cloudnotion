@@ -183,12 +183,48 @@ export function conditionConjunction(condition: FilterCondition, fallback: Conju
 }
 
 /**
+ * 把扁平的条件数组切成「必须满足」块：
+ *
+ * - 块与块之间是「且」（必须满足）；
+ * - 每块的第一条是块头（`conjunction` = `and`），块里剩下的条件是「任意满足」
+ *   （或，命中任意一条就算这块通过）；
+ * - 条件自己没写 `conjunction` 时退回视图级关系（老视图 / 老接口的数据兼容）：
+ *   视图级 `or` 的老视图会全部落在第一块里（整体「或」），视图级 `and` 的老视图
+ *   每条各成一块（整体「且」）。
+ */
+export function groupFilterConditions(
+  conditions: FilterCondition[],
+  fallback: Conjunction = 'and',
+): FilterCondition[][] {
+  const blocks: FilterCondition[][] = [];
+  for (const condition of conditions) {
+    if (!blocks.length || conditionConjunction(condition, fallback) === 'and') blocks.push([condition]);
+    else blocks[blocks.length - 1].push(condition);
+  }
+  return blocks;
+}
+
+/**
+ * 把「必须满足」块写回扁平的条件数组：块头写 `conjunction: 'and'`（整份筛选的第一条
+ * 是起点，不写关系），块里其余条件写 `conjunction: 'or'`。这样块结构不依赖视图级
+ * 关系也能原样还原，界面读到的块和落库的数据始终一致。
+ */
+export function flattenFilterBlocks(blocks: FilterCondition[][]): FilterCondition[] {
+  return blocks.flatMap((conditions, blockIndex) =>
+    conditions.map((condition, index) => {
+      if (index > 0) return { ...condition, conjunction: 'or' as Conjunction };
+      if (blockIndex === 0) return { ...condition, conjunction: undefined };
+      return { ...condition, conjunction: 'and' as Conjunction };
+    }),
+  );
+}
+
+/**
  * Apply the view's conditions to a list of rows.
  *
- * 逐条从左到右折叠：第一条条件决定起点，之后每条条件按自己的关系合并结果——
- * 「必须满足」（且）与已有结果取交集，「任意满足」（或）取并集。所以
- * `A 必须满足 B 任意满足 C` = `(A 且 B) 或 C`，每条条件都能单独选，不必整个
- * 视图统一成 and / or。
+ * 条件按「必须满足」块分组求值：块里是「任意满足」（或），块之间是「必须满足」（且）。
+ * 所以 `(A 或 B) 且 (C 或 D)` 对应「块 1 = A / B 任意满足」+「块 2 = C / D 任意满足」，
+ * 用户可以在界面上加任意多个「必须满足」块，每个块里加任意多条「任意满足」。
  */
 export function filterRows(
   properties: Property[],
@@ -200,18 +236,18 @@ export function filterRows(
   if (!conditions.length) return rows;
   const byId = new Map(properties.map((property) => [property.id, property]));
   const fallback: Conjunction = config.filters?.conjunction === 'or' ? 'or' : 'and';
+  const blocks = groupFilterConditions(conditions, fallback);
 
-  return rows.filter((row) => {
-    let result: boolean | null = null;
-    for (const condition of conditions) {
-      const property = byId.get(condition.propertyId);
-      const value = property ? matchesCondition(property, condition, row, ctx) : true;
-      if (result === null) result = value;
-      else if (conditionConjunction(condition, fallback) === 'or') result = result || value;
-      else result = result && value;
-    }
-    return result ?? true;
-  });
+  return rows.filter((row) =>
+    // 块之间「必须满足」：每一块都要通过
+    blocks.every((block) =>
+      // 块内「任意满足」：命中任意一条就算这一块通过
+      block.some((condition) => {
+        const property = byId.get(condition.propertyId);
+        return property ? matchesCondition(property, condition, row, ctx) : true;
+      }),
+    ),
+  );
 }
 
 /** Keep a single row (used by the worker for view-only shares). */

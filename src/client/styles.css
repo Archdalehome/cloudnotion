@@ -824,12 +824,21 @@ textarea.input {
   display: inline-flex;
 }
 
-/* 筛选面板：标题 + 「每条条件可单独选关系」的说明 */
+/* 筛选面板：说明文字 + 若干个「必须满足」块（块之间是且，块里是任意满足） */
 .filter-head {
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin-bottom: 8px;
+}
+
+/* 一个「必须满足」块：块里的条件之间是「任意满足」（或） */
+.filter-block {
+  margin-bottom: 8px;
+  padding: 6px 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
 }
 
 .filter-row {
@@ -844,19 +853,30 @@ textarea.input {
   max-width: 110px;
 }
 
-/* 「必须满足 / 任意满足」：这条条件与前一条结果的关系；首条用占位符保持对齐 */
+/* 「必须满足 / 任意满足」标签：块头是「必须满足」，块里其余是「任意满足」 */
 .filter-row .filter-link {
   flex: 0 0 92px;
-  width: 92px;
   max-width: 92px;
-}
-
-.filter-row .filter-link.placeholder {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-height: 28px;
   color: var(--text-soft);
   font-size: 12px;
+}
+
+.filter-row .filter-link.head {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 块底部：＋ 添加任意满足 / 删除该块 */
+.filter-block-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
 }
 
 /*

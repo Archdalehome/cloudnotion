@@ -140,8 +140,10 @@ export interface FilterCondition {
   operator: FilterOperator;
   value?: string | number | boolean | string[] | null;
   /**
-   * 这条条件与前一条结果的关系：`and` = 必须满足（且），`or` = 任意满足（或）。
+   * 这条条件与前一条的关系：`and` = 这条**另起一个「必须满足」块**（与前面的块取交集），
+   * `or` = 这条与**同一块**里前面的条件是「任意满足」（命中任意一条即可）。
    * 省略时退回视图级的 {@link Filters.conjunction}（老视图 / 老接口的数据兼容）。
+   * 求值见 shared/viewFilter.ts 的 groupFilterConditions / filterRows。
    */
   conjunction?: 'and' | 'or';
 }
@@ -149,7 +151,8 @@ export interface FilterCondition {
 export interface Filters {
   /**
    * 视图级关系：只对**没有** {@link FilterCondition.conjunction} 的条件生效（老视图兼容）。
-   * 界面上每条条件都能单独选「必须满足 / 任意满足」，求值见 shared/viewFilter.ts。
+   * 界面上每条条件都可选「必须满足 / 任意满足」：多个「必须满足」块之间是「且」，
+   * 每个块里的多条「任意满足」是「或」。
    */
   conjunction: 'and' | 'or';
   conditions: FilterCondition[];

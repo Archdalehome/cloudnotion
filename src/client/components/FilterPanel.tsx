@@ -1,8 +1,12 @@
 /**
- * Multi-condition filter builder (全部满足 / 任意满足) used by the top
- * "＋ 新建筛选" button and by the "new view" form. The operator list comes from
- * the shared field metadata so the client and the worker stay in sync.
- * 人员类字段（创建人 / 最后编辑人）的值支持「当前用户」，筛选时解析为登录用户。
+ * Multi-condition filter builder（「必须满足」块 + 块内「任意满足」）used by the top
+ * "＋ 新建筛选" button and by the "new view" form.
+ *
+ * 结构：可以加任意多个「必须满足」块（块之间是「且」），每个块里可以加任意多条
+ * 「任意满足」（块里命中任意一条就算这块通过）。视图级 `conjunction` 只作为老数据的
+ * 缺省值保留，块头 / 块内关系都写在条件自己身上（见 shared/viewFilter.ts）。
+ * The operator list comes from the shared field metadata so the client and the worker
+ * stay in sync. 人员类字段（创建人 / 最后编辑人）的值支持「当前用户」，筛选时解析为登录用户。
  */
 import {
   CURRENT_USER_VALUE,
@@ -14,7 +18,8 @@ import {
   operatorsNeedValue,
 } from '../../shared/fields';
 import type { FilterCondition, FilterOperator, Filters, Property } from '../../shared/types';
-import { conditionConjunction } from '../../shared/viewFilter';
+import { flattenFilterBlocks, groupFilterConditions } from '../../shared/viewFilter';
+import type { Conjunction } from '../../shared/viewFilter';
 
 /** userId -> 显示名（用于「创建人」等人员类筛选） */
 export type FilterUserNames = Record<string, string>;
@@ -101,7 +106,7 @@ export interface FilterPanelProps {
   filters?: Filters | null;
   canEdit: boolean;
   onChange: (next: Filters) => void;
-  /** label shown in front of the conjunction selector */
+  /** 面板顶部的标题（「必须满足块 / 任意满足」的说明文字跟在标题下面） */
   header?: string;
   /** userId -> 显示名，人员类字段（创建人 / 最后编辑人）的候选值 */
   users?: FilterUserNames;
@@ -112,119 +117,149 @@ export function FilterPanel({
   filters,
   canEdit,
   onChange,
-  header = '条件关系',
+  header = '筛选条件',
   users = {},
 }: FilterPanelProps) {
   const conjunction: Filters['conjunction'] = filters?.conjunction === 'or' ? 'or' : 'and';
   const conditions = filters?.conditions ?? [];
   const propertyOf = (id: string) => properties.find((item) => item.id === id);
+  /** 「必须满足」块：块之间是「且」，块里是「任意满足」（或） */
+  const blocks = groupFilterConditions(conditions, conjunction);
+  const canAdd = canEdit && properties.length > 0;
 
-  /** 视图级关系（`conjunction`）保留下来只作为老数据的缺省值，界面不再整体切换 */
-  const emit = (next: FilterCondition[]) => onChange({ conjunction, conditions: next });
+  /** 视图级关系只作为老数据的缺省值保留，关系都写进条件自己身上 */
+  const emitBlocks = (next: FilterCondition[][]) => onChange({ conjunction, conditions: flattenFilterBlocks(next) });
 
   const patch = (id: string, changes: Partial<FilterCondition>) =>
-    emit(conditions.map((condition) => (condition.id === id ? { ...condition, ...changes } : condition)));
+    emitBlocks(blocks.map((block) => block.map((item) => (item.id === id ? { ...item, ...changes } : item))));
 
-  const add = () => {
+  /** 往第 blockIndex 块里再加一条「任意满足」（命中任意一条就算这块通过） */
+  const addToBlock = (blockIndex: number) => {
     const property = properties[0];
     if (!property) return;
-    // 新条件沿用上一条的关系（第一条没有前一条，用「必须满足」）
-    const previous = conditions[conditions.length - 1];
-    const relation = previous ? conditionConjunction(previous, conjunction) : 'and';
-    emit([...conditions, { ...newCondition(property), conjunction: relation }]);
+    emitBlocks(
+      blocks.map((block, index) =>
+        index === blockIndex ? [...block, { ...newCondition(property), conjunction: 'or' as Conjunction }] : block,
+      ),
+    );
   };
 
-  const remove = (id: string) => emit(conditions.filter((condition) => condition.id !== id));
+  /** 新开一个「必须满足」块：它与前面的所有块之间是「且」 */
+  const addBlock = () => {
+    const property = properties[0];
+    if (!property) return;
+    emitBlocks([...blocks, [{ ...newCondition(property), conjunction: 'and' as Conjunction }]]);
+  };
+
+  const removeCondition = (id: string) =>
+    emitBlocks(blocks.map((block) => block.filter((item) => item.id !== id)).filter((block) => block.length));
+
+  const removeBlock = (blockIndex: number) => emitBlocks(blocks.filter((_, index) => index !== blockIndex));
 
   return (
     <div className="filter-panel">
       <div className="filter-head">
         <span className="small muted">{header}</span>
-        {conditions.length > 1 ? (
-          <span className="small muted">
-            每条条件可单独选「必须满足」（且）或「任意满足」（或），按顺序从左到右组合
-          </span>
-        ) : null}
+        <span className="small muted">
+          可以加多个「必须满足」块（块之间是且）；每个块里加多条「任意满足」，命中任意一条就算这一块通过
+        </span>
       </div>
 
-      {conditions.map((condition, index) => {
-        const property = propertyOf(condition.propertyId) ?? properties[0];
-        if (!property) return null;
-        return (
-          <div className="filter-row" key={condition.id}>
-            {index === 0 ? (
-              // 第一条条件决定筛选的起点，没有「与前一条的关系」
-              <span className="filter-link placeholder" title="第一条条件：筛选从这里开始">
-                首条
-              </span>
-            ) : (
-              <select
-                className="input filter-link"
-                value={conditionConjunction(condition, conjunction)}
-                disabled={!canEdit}
-                title="这条条件与前一条结果的关系：必须满足（且）/ 任意满足（或）"
-                onChange={(event) =>
-                  patch(condition.id, { conjunction: event.target.value === 'or' ? 'or' : 'and' })
-                }
-              >
-                <option value="and">必须满足</option>
-                <option value="or">任意满足</option>
-              </select>
-            )}
-            <select
-              className="input"
-              value={property.id}
-              disabled={!canEdit}
-              onChange={(event) => {
-                const next = propertyOf(event.target.value);
-                if (!next) return;
-                patch(condition.id, {
-                  propertyId: next.id,
-                  operator: defaultOperatorForType(next.type),
-                  value: defaultFilterValueForType(next.type),
-                });
-              }}
-            >
-              {properties.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input"
-              value={condition.operator}
-              disabled={!canEdit}
-              onChange={(event) => patch(condition.id, { operator: event.target.value as FilterOperator })}
-            >
-              {operatorsForType(property.type).map((operator) => (
-                <option key={operator.value} value={operator.value}>
-                  {operator.label}
-                </option>
-              ))}
-            </select>
-            {valueEditor(property, condition.operator, condition.value, users, (next) =>
-              patch(condition.id, { value: next }),
-            )}
+      {blocks.map((block, blockIndex) => (
+        <div className="filter-block" key={block[0]?.id ?? `block-${blockIndex}`}>
+          {block.map((condition, index) => {
+            const property = propertyOf(condition.propertyId) ?? properties[0];
+            if (!property) return null;
+            return (
+              <div className="filter-row" key={condition.id}>
+                <span
+                  className={`filter-link${index === 0 ? ' head' : ''}`}
+                  title={
+                    index === 0
+                      ? '这一条起一个新的「必须满足」块：与前面的块之间是「且」'
+                      : '这一条与同块内其它条件是「任意满足」：命中任意一条就算这块通过'
+                  }
+                >
+                  {index === 0 ? '必须满足' : '任意满足'}
+                </span>
+                <select
+                  className="input"
+                  value={property.id}
+                  disabled={!canEdit}
+                  onChange={(event) => {
+                    const next = propertyOf(event.target.value);
+                    if (!next) return;
+                    patch(condition.id, {
+                      propertyId: next.id,
+                      operator: defaultOperatorForType(next.type),
+                      value: defaultFilterValueForType(next.type),
+                    });
+                  }}
+                >
+                  {properties.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="input"
+                  value={condition.operator}
+                  disabled={!canEdit}
+                  onChange={(event) => patch(condition.id, { operator: event.target.value as FilterOperator })}
+                >
+                  {operatorsForType(property.type).map((operator) => (
+                    <option key={operator.value} value={operator.value}>
+                      {operator.label}
+                    </option>
+                  ))}
+                </select>
+                {valueEditor(property, condition.operator, condition.value, users, (next) =>
+                  patch(condition.id, { value: next }),
+                )}
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="删除条件"
+                  disabled={!canEdit}
+                  onClick={() => removeCondition(condition.id)}
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+
+          <div className="filter-block-foot">
             <button
               type="button"
-              className="icon-btn"
-              title="删除条件"
-              disabled={!canEdit}
-              onClick={() => remove(condition.id)}
+              className="btn ghost small"
+              disabled={!canAdd}
+              onClick={() => addToBlock(blockIndex)}
             >
-              ✕
+              ＋ 添加任意满足
             </button>
+            {blocks.length > 1 ? (
+              <button
+                type="button"
+                className="btn ghost small"
+                title="删除这一块（连同块里的条件）"
+                disabled={!canEdit}
+                onClick={() => removeBlock(blockIndex)}
+              >
+                删除该块
+              </button>
+            ) : null}
           </div>
-        );
-      })}
+        </div>
+      ))}
 
       <div className="row gap">
-        <button type="button" className="btn ghost small" onClick={add} disabled={!canEdit || !properties.length}>
-          ＋ 添加条件
+        <button type="button" className="btn ghost small" disabled={!canAdd} onClick={addBlock}>
+          ＋ 添加必须满足块
         </button>
         {conditions.length ? (
-          <button type="button" className="btn ghost small" onClick={() => emit([])} disabled={!canEdit}>
+          <button type="button" className="btn ghost small" disabled={!canEdit} onClick={() => emitBlocks([])}>
             清空
           </button>
         ) : (

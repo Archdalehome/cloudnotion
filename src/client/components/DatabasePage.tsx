@@ -20,7 +20,7 @@ import type {
   ViewShare,
 } from '../../shared/types';
 import { defaultViewConfig } from '../../shared/views';
-import { conditionConjunction, type Conjunction } from '../../shared/viewFilter';
+import { conditionConjunction, groupFilterConditions, type Conjunction } from '../../shared/viewFilter';
 import { ApiError, api } from '../api';
 import { applyView, groupRows, visibleProperties } from '../lib/viewEngine';
 import { BoardView, GalleryView } from './CardViews';
@@ -130,23 +130,18 @@ export function DatabasePage({
   const viewEditable = canEditStructure && !!activeView && !activeView.locked;
   const filterCount = activeView?.config.filters?.conditions.length ?? 0;
   /**
-   * 「＋ 新建筛选」后面的汇总文案：几个条件、其中几个「必须满足 / 任意满足」。
-   * 每条条件的关系可以不同，所以这里分别计数（第一条是起点，不参与计数）。
+   * 「＋ 新建筛选」后面的汇总文案：几个条件、几个「必须满足」块、块内几条「任意满足」。
+   * 块与块之间是「且」，块里是「或」（命中任意一条即可），所以块数 + 任意满足条数 = 条件数。
    */
   const filterSummary = useMemo(() => {
     const filters = activeView?.config.filters;
     const conditions = filters?.conditions ?? [];
     if (!conditions.length) return '';
     const fallback: Conjunction = filters?.conjunction === 'or' ? 'or' : 'and';
-    let andCount = 0;
-    let orCount = 0;
-    conditions.forEach((condition, index) => {
-      if (index === 0) return;
-      if (conditionConjunction(condition, fallback) === 'or') orCount += 1;
-      else andCount += 1;
-    });
-    const parts = [andCount ? `必须满足 ${andCount}` : '', orCount ? `任意满足 ${orCount}` : ''].filter(Boolean);
-    return parts.length ? `${conditions.length} 个条件（${parts.join(' + ')}）` : `${conditions.length} 个条件`;
+    const blockCount = groupFilterConditions(conditions, fallback).length;
+    const orCount = conditions.length - blockCount;
+    if (!orCount) return `${conditions.length} 个条件（必须全部满足）`;
+    return `${conditions.length} 个条件（${blockCount} 块必须满足 + 任意满足 ${orCount}）`;
   }, [activeView]);
   const shownProperties = activeView ? visibleProperties(properties, activeView.config) : properties;
   /** 筛选上下文：把「当前用户」解析为登录用户 */
@@ -726,7 +721,11 @@ export function DatabasePage({
           <div className="view-toolbar">
             <Popover
               label="＋ 新建筛选"
-              title={viewEditable ? '为该视图添加筛选条件（每条条件可选必须满足 / 任意满足）' : '当前视图不可修改筛选条件'}
+              title={
+                viewEditable
+                  ? '为该视图添加筛选条件：多个「必须满足」块之间是「且」，每个块里可以放多条「任意满足」'
+                  : '当前视图不可修改筛选条件'
+              }
               variant="primary"
               panelWidth={560}
               align="left"

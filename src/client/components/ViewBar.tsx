@@ -214,7 +214,6 @@ function NewViewForm({
         </div>
       </div>
 
-      <div className="menu-label">筛选条件</div>
       <FilterPanel properties={properties} users={users} filters={filters} canEdit onChange={setFilters} />
 
       <label className="row gap" style={{ marginTop: 8 }}>

@@ -291,13 +291,28 @@ async function main() {
     check('delete the default type view', removedDefaultType.status === 200, `status=${removedDefaultType.status}`);
   }
 
+  // 「必须满足」块：第 1 条是块头（不写关系），第 2 条用 conjunction: 'and' 另起一块
   const patchedView = await call(`/api/views/${baseView.id}`, {
     method: 'PATCH',
-    body: { config: { filters: { conjunction: 'and', conditions: [{ propertyId: titleProperty.id, operator: 'contains', value: '第一条', conjunction: 'or' }] } } },
+    body: {
+      config: {
+        filters: {
+          conjunction: 'and',
+          conditions: [
+            { propertyId: titleProperty.id, operator: 'contains', value: '第一条' },
+            { propertyId: titleProperty.id, operator: 'is_not_empty', conjunction: 'and' },
+          ],
+        },
+      },
+    },
   });
   const savedConditions = patchedView.data?.views?.find((view) => view.id === baseView.id)?.config?.filters?.conditions ?? [];
-  check('save view filters', savedConditions.length === 1, JSON.stringify(savedConditions[0] ?? {}));
-  check('save per-condition conjunction', savedConditions[0]?.conjunction === 'or', JSON.stringify(savedConditions[0] ?? {}));
+  check('save view filters', savedConditions.length === 2, JSON.stringify(savedConditions));
+  check(
+    'save per-condition conjunction',
+    savedConditions[0]?.conjunction === undefined && savedConditions[1]?.conjunction === 'and',
+    JSON.stringify(savedConditions.map((condition) => condition.conjunction)),
+  );
 
   // a view created from the "＋ 新建视图" form carries name + multi conditions + lock
   const lockedView = await call(`/api/databases/${databaseId}/views`, {
