@@ -765,6 +765,28 @@ async function main() {
     `notes=${notesRows.data?.notes?.length ?? 0}`,
   );
 
+  // 单条记录同步（记录卡片打开时刷新用）：一条记录 = 值 + 备注 + 已用掉的格子
+  const recordDetail = (notesDetail.data?.rows ?? []).find((row) => row.id === firstId);
+  const synced = await call(`/api/records/${firstId}`);
+  check(
+    'a single record can be synced on its own',
+    synced.status === 200 &&
+      synced.data?.record?.id === firstId &&
+      synced.data?.record?.values?.[titleProperty.id] === recordDetail?.values?.[titleProperty.id] &&
+      Array.isArray(synced.data?.lockedCells) &&
+      synced.data.lockedCells.length === 0 &&
+      (synced.data?.notes ?? []).some((note) => note.id === mentionedNote?.id),
+    `status=${synced.status} notes=${synced.data?.notes?.length ?? 0}`,
+  );
+
+  const syncedMissing = await call('/api/records/record-does-not-exist');
+  const syncedAnon = await call(`/api/records/${firstId}`, { cookie: false });
+  check(
+    'syncing a record needs a session and a real record',
+    syncedMissing.status === 404 && syncedAnon.status === 401,
+    `missing=${syncedMissing.status} anon=${syncedAnon.status}`,
+  );
+
   // 备注只增不改：没有修改 / 删除备注的接口（路径存在但方法不允许）
   const editNote = await call(`/api/records/${firstId}/notes`, { method: 'PATCH', body: { body: '改一下' } });
   const dropNote = await call(`/api/records/${firstId}/notes`, { method: 'DELETE' });
@@ -798,6 +820,15 @@ async function main() {
       inboxRow?.recordTitle === firstTitle &&
       Boolean(inboxRow?.databaseName),
     `title=${textOf(inboxRow?.recordTitle ?? '')}`,
+  );
+
+  // 私信说的「有人 @ 了你」必须能在这条记录的同步结果里看到（这就是卡片点开时的内容）
+  const memberSynced = await call(`/api/records/${firstId}`);
+  check(
+    'the mentioned member syncs the fresh note with the record',
+    memberSynced.status === 200 &&
+      (memberSynced.data?.notes ?? []).some((note) => note.id === mentionedNote?.id),
+    `status=${memberSynced.status} notes=${memberSynced.data?.notes?.length ?? 0}`,
   );
 
   const anonInbox = await call('/api/inbox', { cookie: false });

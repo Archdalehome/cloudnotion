@@ -36,6 +36,15 @@ export interface RecordsPage {
   notes: RecordNote[];
 }
 
+/** 单条记录的最新状态：记录卡片打开 / 定时同步用（比整表分页轻） */
+export interface RecordSync {
+  record: RowRecord;
+  /** 这条记录上的备注，按 `createdAt` 升序 */
+  notes: RecordNote[];
+  /** 当前访问者在这条记录上已经改过一次的格子（`记录 id:字段 id`） */
+  lockedCells: string[];
+}
+
 export interface UploadResult {
   file: { id: string; name: string; size: number; mime: string };
   url: string;
@@ -155,6 +164,12 @@ export const api = {
   updateRecord: (id: string, body: { values?: RowValues; position?: number }) =>
     json<{ record: RowRecord | null; total: number }>(`/api/records/${id}`, 'PATCH', body),
   deleteRecord: (id: string) => json<{ ok: true; total: number }>(`/api/records/${id}`, 'DELETE'),
+
+  /**
+   * 单条记录的最新状态（值 + 备注 + 已用掉的格子）。
+   * 记录卡片打开时用它刷新：别人刚加的备注 / 刚改的值会立刻出现在卡片上。
+   */
+  syncRecord: (recordId: string) => json<RecordSync>(`/api/records/${recordId}`, 'GET'),
 
   /** 添加备注（备注只能新增，不能修改 / 删除） */
   addNote: (recordId: string, body: { body: string; mentions?: string[] }) =>

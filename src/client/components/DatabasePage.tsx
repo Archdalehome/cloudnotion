@@ -34,8 +34,8 @@ import { TableGrid } from './TableGrid';
 import { ViewBar, type NewViewInput } from './ViewBar';
 
 const PAGE_SIZE = 100;
-/** 从私信跳转时，记录不一定落在第一页：最多把整表拉回来这么多条（服务端上限） */
-const MAX_FETCH = 1000;
+/** 记录卡片开着时的同步间隔：别人的备注 / 改动会自己出现在卡片上（单条记录接口，很轻） */
+const OPEN_ROW_POLL_MS = 20_000;
 
 export type ToastFn = (message: string, kind?: 'info' | 'error') => void;
 
@@ -229,6 +229,41 @@ export function DatabasePage({
     });
   }, []);
 
+  /**
+   * 拉一条记录的最新状态（记录值 + 这条记录上的备注 + 已经用掉的格子）并合进本地缓存。
+   *
+   * 记录卡片打开 / 卡片开着时的定时刷新都走这里：只取一条记录，
+   * 比整表分页轻得多，也不受「这条记录不在当前这一页」的限制。
+   * 返回 false 表示这条记录已经被删除（或者已经没有访问权了）。
+   */
+  const syncRecord = useCallback(
+    async (recordId: string): Promise<boolean> => {
+      try {
+        const fresh = await api.syncRecord(recordId);
+        replaceRow(fresh.record);
+        mergeNotes(fresh.notes);
+        mergeLockedCells(fresh.lockedCells);
+        return true;
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 404) return false;
+        throw cause;
+      }
+    },
+    [mergeLockedCells, mergeNotes, replaceRow],
+  );
+
+  /**
+   * 打开记录卡片：先用本地数据立刻渲染，再同步一次最新内容。
+   * 这样别人刚加的备注 / 刚改的单元格不刷新页面也能看到（本地还没有这条记录时会被补进来）。
+   */
+  const openRecord = useCallback(
+    (recordId: string) => {
+      setOpenRowId(recordId);
+      void syncRecord(recordId).catch(() => undefined);
+    },
+    [syncRecord],
+  );
+
   /** 添加备注（只能新增，不能修改 / 删除）；@ 到的人会收到私信 */
   const addNote = async (row: RowRecord, body: string, mentions: string[]) => {
     try {
@@ -246,8 +281,11 @@ export function DatabasePage({
   };
 
   /**
-   * 收件箱私信：打开对应的记录卡片，并定位到那条备注。
-   * 记录不一定在当前这一页（例如从别的表格点进来），那时先把表格整页拉回来。
+   * 收件箱私信：**先**把这条记录同步到最新，再打开记录卡片并定位到那条备注。
+   *
+   * 私信说的是「刚刚有人 @ 了你」，本地缓存里很可能还没有那条备注（卡片是打开表格时的
+   * 快照），所以这里不能因为「记录已经在 rows 里」就直接打开——否则红点跳了、卡片内容
+   * 还是旧的。同步只取这一条记录，不受分页限制（记录不在当前页也能打开）。
    */
   useEffect(() => {
     if (!inboxTarget) return;
@@ -257,35 +295,41 @@ export function DatabasePage({
       setFocusNoteId(noteId);
       onInboxTargetHandled();
     };
-    if (rows.some((row) => row.id === recordId)) {
-      locate();
-      return;
-    }
 
     let cancelled = false;
-    api
-      .getDatabase(detail.id, { limit: MAX_FETCH })
-      .then((next) => {
+    void syncRecord(recordId)
+      .then((found) => {
         if (cancelled) return;
-        setDetail(next);
-        setRows(next.rows);
-        setTotal(next.total);
-        setHasMore(next.hasMore);
-        mergeLockedCells(next.lockedCells);
-        if (next.rows.some((row) => row.id === recordId)) setOpenRowId(recordId);
-        else onToast('这条私信对应的记录已被删除', 'error');
-        setFocusNoteId(noteId);
-        onInboxTargetHandled();
+        locate();
+        if (!found) onToast('这条私信对应的记录已被删除', 'error');
       })
       .catch((cause) => {
         if (cancelled) return;
-        fail(cause, '打开私信对应的记录失败');
-        onInboxTargetHandled();
+        // 网络抖动时退回本地数据：至少把卡片打开，别让用户点了没反应
+        locate();
+        fail(cause, '同步这条私信的最新内容失败');
       });
     return () => {
       cancelled = true;
     };
-  }, [inboxTarget, rows, detail.id, fail, mergeLockedCells, onInboxTargetHandled, onToast]);
+  }, [inboxTarget, syncRecord, fail, onInboxTargetHandled, onToast]);
+
+  /**
+   * 记录卡片开着的时候定时同步 + 切回标签页时同步一次：
+   * 别人在备注里 @ 你、或者改了这行数据，卡片内容会自己跟上，不用手动刷新。
+   */
+  useEffect(() => {
+    if (!openRowId) return;
+    const sync = () => {
+      void syncRecord(openRowId).catch(() => undefined);
+    };
+    const timer = window.setInterval(sync, OPEN_ROW_POLL_MS);
+    window.addEventListener('focus', sync);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', sync);
+    };
+  }, [openRowId, syncRecord]);
 
 
   /* ------------------------------------------------------------------- rows */
@@ -779,7 +823,7 @@ export function DatabasePage({
             users={users}
             view={activeView}
             canEdit={canEdit}
-            onOpen={(row) => setOpenRowId(row.id)}
+            onOpen={(row) => openRecord(row.id)}
             onCreateRow={(option) => {
               if (boardGroupProperty && option) void createRow({ [boardGroupProperty.id]: option });
               else void createRow();
@@ -799,7 +843,7 @@ export function DatabasePage({
             users={users}
             view={activeView}
             canEdit={canEdit}
-            onOpen={(row) => setOpenRowId(row.id)}
+            onOpen={(row) => openRecord(row.id)}
             onCreateRow={() => void createRow()}
           />
         ) : (
@@ -831,7 +875,7 @@ export function DatabasePage({
             onSortProperty={addSortFor}
             onFilterProperty={addFilterFor}
             lockedCells={lockedCells}
-            onOpenRecord={(row) => setOpenRowId(row.id)}
+            onOpenRecord={(row) => openRecord(row.id)}
           />
         )}
 

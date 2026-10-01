@@ -321,12 +321,33 @@ async function pageHandler(ctx: RequestContext): Promise<Response> {
   return json({ rows, total, hasMore: offset + rows.length < total, lockedCells, notes });
 }
 
+/**
+ * 单条记录的同步接口：只返回这一条记录的最新值 + 它的备注 + 当前访问者在这条记录上
+ * 已经用掉的格子。
+ *
+ * 记录卡片打开（含从收件箱私信跳转）与卡片打开期间的定时刷新都用它：别人刚加的备注 /
+ * 刚改的单元格不用刷新整张表格就能看到，而且比整表分页（最多 1000 行 + 全部备注）轻得多，
+ * 也不受「目标记录不在当前这一页」的限制。
+ */
+async function syncRecordHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await accessForRecord(ctx.env, ctx.params.id, user, 'view');
+  const record = await loadRecord(ctx.env, access.recordId);
+  if (!record) throw notFound('记录不存在');
+  const [notes, lockedCells] = await Promise.all([
+    loadNotes(ctx.env, [access.recordId]),
+    loadLockedCellKeys(ctx.env, access.databaseId, memberCellEditKey(access), [access.recordId]),
+  ]);
+  return json({ record, notes, lockedCells });
+}
+
 export const recordRoutes: Route[] = [
   { method: 'POST', path: '/api/databases/:id/records', handler: createRecordHandler },
   { method: 'POST', path: '/api/databases/:id/records/bulk', handler: bulkCreateHandler },
   { method: 'POST', path: '/api/databases/:id/records/duplicate', handler: duplicateRecordsHandler },
   { method: 'POST', path: '/api/databases/:id/records/delete', handler: bulkDeleteHandler },
   { method: 'GET', path: '/api/databases/:id/rows', handler: pageHandler },
+  { method: 'GET', path: '/api/records/:id', handler: syncRecordHandler },
   { method: 'PATCH', path: '/api/records/:id', handler: updateRecordHandler },
   { method: 'DELETE', path: '/api/records/:id', handler: deleteRecordHandler },
 ];
