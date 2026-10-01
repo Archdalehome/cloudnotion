@@ -2,10 +2,11 @@
  * The database workspace: header (rename / share), view tabs, and the active
  * view body (table / board / gallery). Owns every mutation for one database.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId, cellLockHint, cellLockKey, defaultFilterValueForType, defaultOperatorForType, sameCellValue } from '../../shared/fields';
 import type {
   CellValue,
+  DatabaseChanges,
   DatabaseDetail,
   FieldType,
   FileValue,
@@ -36,6 +37,14 @@ import { ViewBar, type NewViewInput } from './ViewBar';
 const PAGE_SIZE = 100;
 /** 记录卡片开着时的同步间隔：别人的备注 / 改动会自己出现在卡片上（单条记录接口，很轻） */
 const OPEN_ROW_POLL_MS = 20_000;
+/**
+ * 表格的增量同步间隔（多人协作）：带着自己看过的版本号去问「比这新的改动有哪些」，
+ * 别人改完单元格几秒内就会出现在这里，不用刷新页面。没有改动时接口只回一个版本号，
+ * 很轻，所以可以比卡片同步更频繁一些。
+ */
+const LIVE_SYNC_POLL_MS = 5_000;
+/** 别人改过的格子高亮多久（与 styles.css 里 cell-flash 动画的时长一致） */
+const FLASH_MS = 1_800;
 
 export type ToastFn = (message: string, kind?: 'info' | 'error') => void;
 
@@ -90,6 +99,20 @@ export function DatabasePage({
     () => new Set(database.lockedCells ?? []),
   );
   /**
+   * 别人的改动刚落到本地、需要闪一下的格子（`记录 id:字段 id`）：
+   * 让人一眼看出「哪一格有新数据」，FLASH_MS 之后自动清空。
+   */
+  const [flashCells, setFlashCells] = useState<ReadonlySet<string>>(() => new Set());
+  /**
+   * 增量同步游标：本地看过的最大改动版本号。第一次打开表格时取服务端下发的 `rev`，
+   * 之后每次同步都推进到服务端返回的新版本号（请求时带 `?since=<rev>`）。
+   */
+  const revRef = useRef(database.rev ?? 0);
+  /** 正在飞的本地写请求数：> 0 时轮询先不动本地数据，免得把刚改的值顶回去 */
+  const pendingWrites = useRef(0);
+  /** 高亮清理定时器（组件卸载时要清掉） */
+  const flashTimer = useRef<number | null>(null);
+  /**
    * 表格视图里勾选的记录 id。状态提到这里是因为批量操作栏（已选 N 条 / 复制 / 删除 /
    * 取消选择）显示在「＋ 新建筛选」后面，而不是表格上方。
    */
@@ -103,6 +126,9 @@ export function DatabasePage({
     setLockedCells(new Set(database.lockedCells ?? []));
     setNameDraft(database.name);
     setSelectedRowIds([]);
+    setFlashCells(new Set());
+    // 换了一张表格 / 整个页面重新加载：增量同步的游标回到服务端刚下发的版本号
+    revRef.current = database.rev ?? 0;
     setActiveViewId((prev) =>
       prev && database.views.some((view) => view.id === prev) ? prev : database.views[0]?.id ?? null,
     );
@@ -187,6 +213,8 @@ export function DatabasePage({
       setTotal(next.total);
       setHasMore(next.hasMore);
       mergeLockedCells(next.lockedCells);
+      // 整表重载后游标跟着新数据走（服务端是先给版本号再给数据，所以不会漏改动）
+      revRef.current = next.rev ?? 0;
     } catch (cause) {
       fail(cause, '刷新失败');
     }
@@ -266,6 +294,7 @@ export function DatabasePage({
 
   /** 添加备注（只能新增，不能修改 / 删除）；@ 到的人会收到私信 */
   const addNote = async (row: RowRecord, body: string, mentions: string[]) => {
+    const release = beginWrite();
     try {
       const result = await api.addNote(row.id, { body, mentions });
       mergeNotes(result.notes);
@@ -277,6 +306,8 @@ export function DatabasePage({
       fail(cause, '备注添加失败');
       // 抛回输入框：保留草稿并把错误显示在输入框旁边
       throw cause;
+    } finally {
+      release();
     }
   };
 
@@ -331,6 +362,161 @@ export function DatabasePage({
     };
   }, [openRowId, syncRecord]);
 
+  /* ------------------------------------------------- live sync（协作同步） */
+
+  /** 本地最新的一批行：增量合并时用它算「哪些格子变了」（不在 setState 里做副作用） */
+  const rowsRef = useRef(rows);
+  /** openRowId 的镜像：轮询回调里用它判断「打开着的记录是不是被别人删了」 */
+  const openRowRef = useRef<string | null>(null);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+  useEffect(() => {
+    openRowRef.current = openRowId;
+  }, [openRowId]);
+
+  /**
+   * 标记一次本地写请求（返回的 release 必须调用）。
+   * 有写入在飞的时候轮询先跳过本地合并，免得把用户刚改的值顶回成旧值 ——
+   * 写入结束后服务端自己也会记一条改动，下一轮同步自然会把权威值取回来。
+   */
+  const beginWrite = useCallback(() => {
+    pendingWrites.current += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      pendingWrites.current = Math.max(0, pendingWrites.current - 1);
+    };
+  }, []);
+
+  /** 别人改过的格子闪一下（同一格的连续改动只闪一次，够用了） */
+  const flash = useCallback((keys: string[]) => {
+    if (!keys.length) return;
+    setFlashCells((prev) => {
+      const next = new Set(prev);
+      for (const key of keys) next.add(key);
+      return next;
+    });
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => {
+      setFlashCells(new Set());
+      flashTimer.current = null;
+    }, FLASH_MS);
+  }, []);
+
+  /** 卸载时清掉高亮定时器 */
+  useEffect(
+    () => () => {
+      if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+
+
+  /**
+   * 把一轮增量改动合进本地状态：
+   * 改过的行就地更新（并高亮真正变了的格子）、被删掉的行移除、
+   * 新备注合并、顺带更新「限制编辑」用掉的格子和记录总数。
+   */
+  const applyChanges = useCallback(
+    (changes: DatabaseChanges) => {
+      const gone = new Set(changes.deleted);
+      if (gone.size) {
+        // 打开着的记录被别人删了：关掉卡片并说明一下
+        if (openRowRef.current && gone.has(openRowRef.current)) {
+          setOpenRowId(null);
+          onToast('这条记录已被其他人删除');
+        }
+        setSelectedRowIds((prev) => prev.filter((id) => !gone.has(id)));
+        setDetail((prev) => ({ ...prev, notes: prev.notes.filter((note) => !gone.has(note.recordId)) }));
+      }
+
+      if (gone.size || changes.rows.length) {
+        // 一份合并结果同时处理「改过的行」与「删掉的行」，本地行缓存一次更新到位
+        const byId = new Map(rowsRef.current.filter((row) => !gone.has(row.id)).map((row) => [row.id, row]));
+        const changed: string[] = [];
+        for (const record of changes.rows) {
+          const before = byId.get(record.id);
+          if (before) {
+            // 只高亮真正变了的格子：值不同，或者原来的值被清空了
+            for (const [propertyId, value] of Object.entries(record.values)) {
+              if (!sameCellValue(before.values[propertyId], value)) {
+                changed.push(cellLockKey(record.id, propertyId));
+              }
+            }
+            for (const propertyId of Object.keys(before.values)) {
+              if (!(propertyId in record.values)) changed.push(cellLockKey(record.id, propertyId));
+            }
+          }
+          byId.set(record.id, record);
+        }
+        const next = [...byId.values()].sort((a, b) => a.position - b.position);
+        rowsRef.current = next;
+        setRows(next);
+        if (changed.length) flash(changed);
+      }
+
+      // 别人的改动可能带来本地还没见过的用户（创建人 / 最后编辑人）
+      if (Object.keys(changes.people).length) {
+        setDetail((prev) => ({ ...prev, people: { ...prev.people, ...changes.people } }));
+      }
+      mergeNotes(changes.notes);
+      mergeLockedCells(changes.lockedCells);
+      setTotal(changes.total);
+      setHasMore(rowsRef.current.length < changes.total);
+    },
+    [flash, mergeLockedCells, mergeNotes, onToast],
+  );
+
+  /**
+   * 增量同步：每隔几秒问一次服务端「比我看过的版本号新的是什么」
+   * （改过的行 / 删掉的行 / 新备注），把别人的改动合进本地状态 ——
+   * 所以另一个用户改完单元格，这边不刷新页面就能看到，变了的格子还会闪一下。
+   *
+   * - 标签页在后台、或者本地正在写入时先跳过，切回来（focus / visibilitychange）立刻补一次；
+   * - 服务端回 `reset`（改动太多 / 日志已被清理）时整表重载一次，
+   *   游标由 `reload()` 里的新数据接管。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let running = false;
+
+    const tick = async () => {
+      if (cancelled || running) return;
+      if (document.visibilityState !== 'visible') return;
+      if (pendingWrites.current > 0) return;
+      running = true;
+      try {
+        const changes = await api.changes(detail.id, revRef.current);
+        if (cancelled) return;
+        if (changes.reset) {
+          await reload();
+          return;
+        }
+        // 请求期间本地又开始写了：这一轮不改本地数据，也不推进游标
+        if (pendingWrites.current > 0) return;
+        revRef.current = changes.rev;
+        applyChanges(changes);
+      } catch {
+        // 网络抖动：下一轮再试，不影响本地编辑
+      } finally {
+        running = false;
+      }
+    };
+
+    const timer = window.setInterval(() => void tick(), LIVE_SYNC_POLL_MS);
+    const wake = () => void tick();
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [applyChanges, detail.id, reload]);
+
 
   /* ------------------------------------------------------------------- rows */
 
@@ -353,6 +539,7 @@ export function DatabasePage({
 
   const createRow = async (preset?: Record<string, CellValue>) => {
     if (!canEdit) return;
+    const release = beginWrite();
     try {
       const result = await api.createRecord(detail.id, { values: { ...preset } });
       if (result.record) replaceRow(result.record);
@@ -360,6 +547,8 @@ export function DatabasePage({
       onReloadList();
     } catch (cause) {
       fail(cause, '新建记录失败');
+    } finally {
+      release();
     }
   };
 
@@ -378,6 +567,8 @@ export function DatabasePage({
     }
     // 值没变就不发请求，也不消耗那一次机会（与服务端的判断保持一致）
     if (sameCellValue(row.values[property.id], value)) return;
+    // 这一轮写入在飞的时候，轮询先不要动本地数据（否则刚改的值会被顶回去）
+    const release = beginWrite();
     // optimistic update, then replace with the authoritative record
     setRows((prev) =>
       prev.map((item) => {
@@ -397,11 +588,16 @@ export function DatabasePage({
     } catch (cause) {
       fail(cause, '保存失败');
       replaceRow(row);
+      // 保存失败时把服务端的权威值再取一次：这一格在写入期间可能刚被别人改过
+      void syncRecord(row.id).catch(() => undefined);
+    } finally {
+      release();
     }
   };
 
   const duplicateRows = async (targets: RowRecord[]) => {
     if (!canEdit || !targets.length) return;
+    const release = beginWrite();
     try {
       const result = await api.duplicateRecords(
         detail.id,
@@ -412,12 +608,15 @@ export function DatabasePage({
       onReloadList();
     } catch (cause) {
       fail(cause, '复制失败');
+    } finally {
+      release();
     }
   };
 
   const deleteRows = async (targets: RowRecord[]) => {
     if (!canEdit || !targets.length) return;
     const ids = new Set(targets.map((row) => row.id));
+    const release = beginWrite();
     try {
       const result = await api.deleteRecords(detail.id, [...ids]);
       setRows((prev) => prev.filter((row) => !ids.has(row.id)));
@@ -426,6 +625,8 @@ export function DatabasePage({
       onReloadList();
     } catch (cause) {
       fail(cause, '删除失败');
+    } finally {
+      release();
     }
   };
 
@@ -875,6 +1076,7 @@ export function DatabasePage({
             onSortProperty={addSortFor}
             onFilterProperty={addFilterFor}
             lockedCells={lockedCells}
+            flashCells={flashCells}
             onOpenRecord={(row) => openRecord(row.id)}
           />
         )}

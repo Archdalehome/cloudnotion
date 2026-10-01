@@ -18,6 +18,7 @@
 | 记录 | 新建/编辑/删除、批量创建、批量删除、复制记录、分页（`limit`/`offset`）、乐观更新 + 失败回滚；行末的「复制记录 / 删除记录」操作列已移除，复制 / 删除统一走**批量操作栏（已选 N 条 / 复制 / 删除 / 取消选择）**，它显示在「＋ 新建筛选」后面的视图工具栏里；行首的方框列不再吸边，跟着表格一起左右滚动 |
 | 视图 | **新建视图固定为表格类型**（弹窗里不再让用户选类型；表格 / 看板 / 画廊三种类型依然都能正常渲染，看板、画廊来自示例数据或历史数据），支持筛选（**按「必须满足」块分组**：「＋ 添加必须满足块」可以加任意多个块，块与块之间是「且」；每个块里用「＋ 添加任意满足」加任意多条条件，命中任意一条就算这一块通过。所以 `(A 或 B) 且 (C 或 D)` = 块 1（A / B 任意满足）+ 块 2（C / D 任意满足）。老视图只带视图级 `conjunction` 时行为不变：`or` = 单块全「或」，`and` = 每条各成一块）、排序（单键）、分组、隐藏字段、行高/卡片大小，全部配置存 D1 |
 | 协作 | 成员分为 `editor`/`viewer`，所有者始终排在成员列表首位且不可被移除（邀请 / 改角色 / 移除的接口保留在后端，界面已移除管理入口） |
+| 实时同步 | **多人协作不用刷新页面**：每一次改动（改单元格 / 增删记录 / 新增备注 / 改结构）都会记一条带自增版本号的日志（`database_changes`），表格页开着的时候每 5 秒带 `?since=<rev>` 拉一次增量（`GET /api/databases/:id/changes`），只把别人改过的行就地合并进本地表格并**高亮闪一下变了的格子**，被删掉的行自动消失；记录卡片仍额外每 20 秒同步一次（`GET /api/records/:id`）。标签页切回前台时立刻补一次；本地正在写入时那一轮先跳过（不会把刚改的值顶回去）；服务端说改动太多 / 结构变了（`reset`）就整表重载一次。公开链接页（`/share/:token`）走同一套增量接口 `/api/public/:token/changes` |
 | 锁定 | 两层只读控制：**视图锁定**（名称 / 筛选 / 可见字段不可改，不可删除）、**字段锁定**（表头 `▾` 菜单里锁定，该字段所有记录只能查看，编辑与附件上传都会被服务端拒绝）。表级「表格锁定」已移除：`PATCH /api/databases/:id` 里的 `locked` 会被忽略，字段与视图结构只受访问权与定向分享限制 |
 | 分享 | **视图定向分享**：把单个视图（含它的筛选与可见字段）分享给已注册账号，打开面板的入口是视图工具栏的「分享」；公开链接 `/share/:token`（只读 / 可编辑、可设 7/30/90 天过期，写操作走 `/api/public/*`）接口保留，界面已移除生成入口 |
 | 附件 | 上传到 R2（默认上限 25MB，`MAX_UPLOAD_MB` 可调），元数据存 `files` 表 |
@@ -33,6 +34,7 @@ src/
     http.ts    json/readJson/参数校验/错误构造等工具
     auth.ts    Cookie 会话、密码哈希、requireUser
     access.ts  表格访问级别判定（view/edit/manage）
+    changes.ts 多人协作的增量同步：改动日志（database_changes）+「自某个版本号起的改动」查询
     mappers.ts D1 行 -> API 类型
     routes/    auth / databases / properties / records / views / public / files / notes
   client/     React SPA
@@ -50,6 +52,7 @@ migrations/
   0001_init.sql     D1 初始化迁移
   ...               0002-0005：视图定向分享 / 字段锁定 / 分享限制编辑等增量迁移
   0006_notes.sql    记录备注（notes）+ @提醒私信（note_mentions）
+  0007_database_changes.sql  多人协作增量同步的改动日志（database_changes，rev 全局自增）
 ```
 
 ## 快速开始
@@ -66,7 +69,7 @@ npm run dev
 
 - `npm run dev:web`：只跑 Vite 前端（`/api` 需代理到 Worker，见 `vite.config.ts`）
 - `npm run typecheck`：`tsconfig.client.json` + `tsconfig.worker.json` 全量类型检查
-- `npm run check:routes`：路由自检（当前 40 条路由）
+- `npm run check:routes`：路由自检（当前 43 条路由）
 - `npm run test:e2e`：对运行中的 Worker 跑端到端冒烟测试
 
 ```bash
@@ -75,7 +78,7 @@ node scripts/smoke-test.mjs
 BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 ```
 
-冒烟测试覆盖：健康检查 → 注册/会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删（含表级锁定参数被忽略的回归断言）→ 分享链接（只读拒写、可编辑可写）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读、所有者 ↔ 定向分享访客互相 @、单条记录同步接口）→ R2 上传下载 → 清理。
+冒烟测试覆盖：健康检查 → 注册/会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删（含表级锁定参数被忽略的回归断言）→ 分享链接（只读拒写、可编辑可写）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读、所有者 ↔ 定向分享访客互相 @、单条记录同步接口）→ **多人协作增量同步**（版本号游标、新行/改单元格/新备注/删行各自进增量、空增量、结构改动返回 reset）→ R2 上传下载 → 清理。
 
 ## 数据模型
 
@@ -89,6 +92,11 @@ BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 - `files`：R2 对象元数据（`r2_key`、名称、大小、MIME）
 - `notes`：记录备注（评论），**只增不改**（没有 update / delete 语句与接口）
 - `note_mentions`：备注里 @ 到的人 → 收件箱私信；`read_at` 为 NULL 表示未读（就是红点里的数字）
+- `database_changes`：多人协作的**改动日志**（`rev` 全局自增主键、`kind` = row/delete/note/schema、`record_id`）。
+  客户端带着看过的最大 `rev` 轮询增量接口；日志永远写在数据之后（先写数据、再写日志），
+  所以「先读 rev 再读数据」不会漏改动，最多重复下发一次（客户端按 id 合并，幂等）。
+  写入时以 1/20 的概率顺手清掉 7 天前的旧日志；日志被清过 / 攒了太多改动（> 500 条）时接口回
+  `reset: true`，客户端整表重载一次
 
 ## API 一览
 
@@ -97,6 +105,7 @@ POST   /api/auth/register | /api/auth/login | /api/auth/logout
 GET    /api/session
 GET    /api/databases              POST /api/databases
 GET|PATCH|DELETE /api/databases/:id
+GET    /api/databases/:id/changes          （多人协作增量：自 ?since=<rev> 起的改动）
 POST   /api/databases/:id/members
 POST   /api/databases/:id/properties
 GET|POST /api/databases/:id/records
@@ -115,6 +124,7 @@ PATCH|DELETE /api/members/:id
 DELETE /api/shares/:id
 POST   /api/files   GET|DELETE /api/files/:id
 GET    /api/public/:token
+GET    /api/public/:token/changes          （公开链接页的增量同步，同一套逻辑）
 POST   /api/public/:token/records
 PATCH|DELETE /api/public/:token/records/:recordId
 GET    /api/health
@@ -130,8 +140,8 @@ GET    /api/health
 
 ```
 verify   npm ci -> npm run typecheck -> npm run check:routes -> vite build
-e2e      本地 D1 迁移 -> wrangler dev --local -> scripts/smoke-test.mjs（46 项断言）
-deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 线上 46 项冒烟测试
+e2e      本地 D1 迁移 -> wrangler dev --local -> scripts/smoke-test.mjs（153 项断言）
+deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 线上 153 项冒烟测试
 ```
 
 只需在仓库 `Settings → Secrets and variables → Actions` 配置：

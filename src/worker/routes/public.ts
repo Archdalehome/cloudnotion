@@ -8,6 +8,7 @@ import {
   rememberCellEdits,
   shareCellEditKey,
 } from '../cellEdits';
+import { headRev, loadChanges, logChanges } from '../changes';
 import {
   asNumberValue,
   badRequest,
@@ -49,6 +50,9 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     .first<SqlRow>();
   if (!row) throw notFound('表格不存在');
 
+  // 增量同步的起点：先读版本号、再读数据（写入顺序是「先数据、后日志」）
+  const rev = await headRev(ctx.env);
+
   const [properties, views, rows, total] = await Promise.all([
     loadProperties(ctx.env, share.databaseId),
     loadViews(ctx.env, share.databaseId),
@@ -82,6 +86,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     rows,
     total,
     hasMore: offset + rows.length < total,
+    rev,
     people,
     lockedCells,
   };
@@ -115,6 +120,8 @@ async function publicCreateRecordHandler(ctx: RequestContext): Promise<Response>
     .bind(recordId, share.databaseId, JSON.stringify(values), sqlNumber(row ?? {}, 'max_position', 0) + 1000, now, now)
     .run();
   await touchDatabase(ctx.env, share.databaseId);
+  // 通过分享链接新建的记录：表格里的协作者也会同步到
+  await logChanges(ctx.env, share.databaseId, 'row', [recordId]);
 
   const created = await ctx.env.DB.prepare('SELECT * FROM records WHERE id = ?').bind(recordId).first<SqlRow>();
   return json({ record: created ? recordFromRow(created) : null }, { status: 201 });
@@ -160,6 +167,8 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
   // 写入成功之后才登记，避免失败的请求白白消耗机会
   await rememberCellEdits(ctx.env, share.databaseId, editorKey, ctx.params.recordId, changed);
   await touchDatabase(ctx.env, share.databaseId);
+  // 通过分享链接改的格子：表格里的协作者几秒内就能看到
+  await logChanges(ctx.env, share.databaseId, 'row', [ctx.params.recordId]);
 
   const updated = await ctx.env.DB.prepare('SELECT * FROM records WHERE id = ?')
     .bind(ctx.params.recordId)
@@ -174,11 +183,29 @@ async function publicDeleteRecordHandler(ctx: RequestContext): Promise<Response>
     .run();
   if (!result.meta.changes) throw notFound('记录不存在');
   await touchDatabase(ctx.env, share.databaseId);
+  await logChanges(ctx.env, share.databaseId, 'delete', [ctx.params.recordId]);
   return json({ ok: true });
+}
+
+/**
+ * 公开链接页的增量同步：和登录用户的 /api/databases/:id/changes 同一套逻辑，
+ * 只是访问权来自分享 token（可看 / 可编辑的链接都能看，写不了）。
+ */
+async function publicChangesHandler(ctx: RequestContext): Promise<Response> {
+  const share = await requireShare(ctx.env, ctx.params.token, false);
+  const since = Number(ctx.url.searchParams.get('since') ?? 0);
+  const changes = await loadChanges(
+    ctx.env,
+    share.databaseId,
+    { editorKey: shareCellEditKey(share), viewIds: null, viewerId: '' },
+    since,
+  );
+  return json(changes);
 }
 
 export const publicRoutes: Route[] = [
   { method: 'GET', path: '/api/public/:token', handler: publicDatabaseHandler },
+  { method: 'GET', path: '/api/public/:token/changes', handler: publicChangesHandler },
   { method: 'POST', path: '/api/public/:token/records', handler: publicCreateRecordHandler },
   { method: 'PATCH', path: '/api/public/:token/records/:recordId', handler: publicUpdateRecordHandler },
   { method: 'DELETE', path: '/api/public/:token/records/:recordId', handler: publicDeleteRecordHandler },

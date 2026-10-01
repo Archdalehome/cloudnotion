@@ -317,6 +317,12 @@ export interface DatabaseDetail {
   viewScoped: boolean;
   createdAt: number;
   updatedAt: number;
+  /**
+   * 服务端当前的改动版本号（多人协作增量同步的游标）。
+   * 打开表格时先记下它，之后每隔几秒带 `?since=<rev>` 轮询
+   * `GET /api/databases/:id/changes`，只拿别人刚改的格子 / 刚加的备注。
+   */
+  rev: number;
   properties: Property[];
   views: ViewDef[];
   members: Member[];
@@ -349,6 +355,35 @@ export interface DatabaseDetail {
    * 定向分享的访问者不是表格成员，只有这份映射才能显示「创建人」的姓名。
    */
   people: Record<string, string>;
+}
+
+/**
+ * 增量同步的返回体：自客户端手上的 `rev` 之后的改动。
+ *
+ * 前端在表格页开着的时候每隔几秒轮询一次（`?since=<rev>`），
+ * 只把「有更新的单元格 / 新记录 / 被删掉的行 / 新备注」合并进本地状态，
+ * 所以别人改数据不用刷新页面就能看到，也不用整表重拉。
+ */
+export interface DatabaseChanges {
+  /** 服务端当前的版本号：下次请求带上它，就只看更新的改动 */
+  rev: number;
+  /**
+   * true = 攒了太多改动（或日志已被清理），这一轮不带增量，
+   * 客户端应该整表重载一次并以新数据的 `rev` 作为游标。
+   */
+  reset: boolean;
+  /** 值 / 顺序有变化的记录（已删掉的不在其中） */
+  rows: RowRecord[];
+  /** 被删除的记录 id */
+  deleted: string[];
+  /** 这些记录上新加的备注（备注只增不改，可以直接合并） */
+  notes: RecordNote[];
+  /** 当前访问者已经用掉的格子（「限制编辑」才有内容） */
+  lockedCells: string[];
+  /** 行元数据里出现过的用户 id → 显示名（别人的改动可能带来本地没有的姓名） */
+  people: Record<string, string>;
+  /** 表格当前的记录总数 */
+  total: number;
 }
 
 /* ----------------------------------------------------------------- users */
@@ -396,6 +431,11 @@ export interface PublicDatabaseResponse {
   rows: RowRecord[];
   total: number;
   hasMore: boolean;
+  /**
+   * 服务端当前的改动版本号（增量同步游标）：公开链接页也每隔几秒带
+   * `?since=<rev>` 轮询 `/api/public/:token/changes`，别人改的格子自己出现。
+   */
+  rev: number;
   /** 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名 */
   people: Record<string, string>;
   /**

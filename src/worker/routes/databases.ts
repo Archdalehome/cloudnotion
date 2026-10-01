@@ -15,6 +15,7 @@ import { defaultViewConfig } from '../../shared/views';
 import { requireDatabaseAccess, type DatabaseAccess } from '../access';
 import { requireUser } from '../auth';
 import { loadLockedCellKeys, memberCellEditKey } from '../cellEdits';
+import { headRev, loadChanges, logChanges } from '../changes';
 import {
   asEnum,
   asFlag,
@@ -459,6 +460,10 @@ export async function buildDatabaseDetail(
     .first<SqlRow>();
   if (!row) throw notFound('表格不存在');
 
+  // 增量同步的起点：**先**读版本号、再读数据（写入顺序是「先数据、后日志」，
+  // 见 worker/changes.ts 的文件头），客户端拿它当游标就不会漏掉任何改动
+  const rev = await headRev(env);
+
   const limit = clampLimit(url);
   const offset = clampOffset(url);
   const scoped = Boolean(access.viewIds?.length);
@@ -502,6 +507,7 @@ export async function buildDatabaseDetail(
     viewScoped: scoped,
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
+    rev,
     properties,
     views,
     members,
@@ -574,6 +580,30 @@ async function detailHandler(ctx: RequestContext): Promise<Response> {
   return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access, ctx.url));
 }
 
+/**
+ * 增量同步（多人协作）：只返回「比客户端手上的版本号新」的改动 ——
+ * 改过的行 + 删掉的行 + 新备注 + 已用掉的格子，前端据此就地更新单元格，
+ * 不用刷新页面，也不用整表重拉。
+ *
+ * `reset` 为 true 时前端整表重载一次（改动太多 / 日志已被清理）。
+ */
+async function changesHandler(ctx: RequestContext): Promise<Response> {
+  const user = await requireUser(ctx.request, ctx.env);
+  const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
+  const since = Number(ctx.url.searchParams.get('since') ?? 0);
+  const changes = await loadChanges(
+    ctx.env,
+    ctx.params.id,
+    {
+      editorKey: memberCellEditKey(access),
+      viewIds: access.viewIds,
+      viewerId: access.userId,
+    },
+    since,
+  );
+  return json(changes);
+}
+
 async function recordsPageHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'view');
@@ -621,6 +651,8 @@ async function updateHandler(ctx: RequestContext): Promise<Response> {
   await ctx.env.DB.prepare(`UPDATE databases SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...values)
     .run();
+  // 表格改名 / 换图标 / 改描述：别人的页面跟着整表刷新一次
+  await logChanges(ctx.env, ctx.params.id, 'schema');
   return json(await buildDatabaseDetail(ctx.env, ctx.params.id, access, ctx.url));
 }
 
@@ -676,6 +708,8 @@ async function addMemberHandler(ctx: RequestContext): Promise<Response> {
     .run();
 
   await touchDatabase(ctx.env, ctx.params.id);
+  // 成员列表变了（备注 @ 名单 / 侧边栏也会跟着变）
+  await logChanges(ctx.env, ctx.params.id, 'schema');
   return json({ members: await loadMembers(ctx.env, ctx.params.id) });
 }
 
@@ -689,6 +723,7 @@ async function updateMemberHandler(ctx: RequestContext): Promise<Response> {
   )
     .bind(role, ctx.params.id, databaseId)
     .run();
+  await logChanges(ctx.env, databaseId, 'schema');
   return json({ members: await loadMembers(ctx.env, databaseId), role: access.role });
 }
 
@@ -698,6 +733,7 @@ async function removeMemberHandler(ctx: RequestContext): Promise<Response> {
   await ctx.env.DB.prepare('DELETE FROM database_members WHERE id = ? AND database_id = ?')
     .bind(ctx.params.id, databaseId)
     .run();
+  await logChanges(ctx.env, databaseId, 'schema');
   return json({ members: await loadMembers(ctx.env, databaseId) });
 }
 
@@ -719,6 +755,7 @@ async function createShareHandler(ctx: RequestContext): Promise<Response> {
     .bind(newId(), ctx.params.id, token, permission, limitEdits ? 1 : 0, user.id, expiresAt, Date.now())
     .run();
 
+  await logChanges(ctx.env, ctx.params.id, 'schema');
   return json({ shares: await loadShares(ctx.env, ctx.params.id) }, { status: 201 });
 }
 
@@ -731,6 +768,7 @@ async function deleteShareHandler(ctx: RequestContext): Promise<Response> {
   const databaseId = sqlString(row, 'database_id');
   await requireDatabaseAccess(ctx.env, databaseId, user, 'edit');
   await ctx.env.DB.prepare('DELETE FROM shares WHERE id = ?').bind(ctx.params.id).run();
+  await logChanges(ctx.env, databaseId, 'schema');
   return json({ shares: await loadShares(ctx.env, databaseId) });
 }
 
@@ -772,6 +810,7 @@ async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
     .run();
 
   await touchDatabase(ctx.env, ctx.params.id);
+  await logChanges(ctx.env, ctx.params.id, 'schema');
   return json({ viewShares: await loadViewShares(ctx.env, ctx.params.id) }, { status: 201 });
 }
 
@@ -784,6 +823,7 @@ async function deleteViewShareHandler(ctx: RequestContext): Promise<Response> {
   const databaseId = sqlString(row, 'database_id');
   await requireDatabaseAccess(ctx.env, databaseId, user, 'manage');
   await ctx.env.DB.prepare('DELETE FROM view_shares WHERE id = ?').bind(ctx.params.id).run();
+  await logChanges(ctx.env, databaseId, 'schema');
   return json({ viewShares: await loadViewShares(ctx.env, databaseId) });
 }
 
@@ -791,6 +831,7 @@ export const databaseRoutes: Route[] = [
   { method: 'GET', path: '/api/databases', handler: listHandler },
   { method: 'POST', path: '/api/databases', handler: createHandler },
   { method: 'GET', path: '/api/databases/:id', handler: detailHandler },
+  { method: 'GET', path: '/api/databases/:id/changes', handler: changesHandler },
   { method: 'PATCH', path: '/api/databases/:id', handler: updateHandler },
   { method: 'DELETE', path: '/api/databases/:id', handler: deleteHandler },
   { method: 'GET', path: '/api/databases/:id/records', handler: recordsPageHandler },

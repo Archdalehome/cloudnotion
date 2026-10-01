@@ -4,6 +4,7 @@ import type { FileValue } from '../../shared/types';
 import { requireDatabaseAccess, resolveShareToken } from '../access';
 import { getCurrentUser, requireUser } from '../auth';
 import { isCellLocked, memberCellEditKey, shareCellEditKey } from '../cellEdits';
+import { logChanges } from '../changes';
 import {
   asString,
   badRequest,
@@ -124,6 +125,8 @@ async function uploadHandler(ctx: RequestContext): Promise<Response> {
     .run();
 
   if (databaseId) await touchDatabase(ctx.env, databaseId);
+  // 附件挂在某条记录上时也算这行「有更新」：别人的表格页会立刻同步一次这行
+  if (databaseId && recordId) await logChanges(ctx.env, databaseId, 'row', [recordId]);
 
   const value: FileValue = { id: fileId, name, size: file.size, mime };
   return json({ file: value, url: `/api/files/${fileId}` }, { status: 201 });

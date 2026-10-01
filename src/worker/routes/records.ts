@@ -10,6 +10,7 @@ import {
   memberCellEditKey,
   rememberCellEdits,
 } from '../cellEdits';
+import { logChanges } from '../changes';
 import {
   asNumberValue,
   badRequest,
@@ -123,6 +124,8 @@ async function createRecordHandler(ctx: RequestContext): Promise<Response> {
     )
     .run();
   await touchDatabase(ctx.env, ctx.params.id);
+  // 攒一条改动日志：别人的表格页几秒内就会把这一行补上（见 worker/changes.ts）
+  await logChanges(ctx.env, ctx.params.id, 'row', [recordId]);
 
   return json(
     {
@@ -178,6 +181,7 @@ async function bulkCreateHandler(ctx: RequestContext): Promise<Response> {
 
   await ctx.env.DB.batch(statements);
   await touchDatabase(ctx.env, ctx.params.id);
+  await logChanges(ctx.env, ctx.params.id, 'row', ids);
 
   const loaded = await Promise.all(ids.map((id) => loadRecord(ctx.env, id)));
   return json(
@@ -230,6 +234,8 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
   // 写入成功之后才登记，避免失败的请求白白消耗机会
   await rememberCellEdits(ctx.env, access.databaseId, editorKey, ctx.params.id, changed);
   await touchDatabase(ctx.env, access.databaseId);
+  // 顺序很重要：数据先落库、日志后写（见 worker/changes.ts 的文件头）
+  await logChanges(ctx.env, access.databaseId, 'row', [ctx.params.id]);
 
   return json({
     record: await loadRecord(ctx.env, ctx.params.id),
@@ -242,6 +248,7 @@ async function deleteRecordHandler(ctx: RequestContext): Promise<Response> {
   const access = await accessForRecord(ctx.env, ctx.params.id, user, 'edit');
   await ctx.env.DB.prepare('DELETE FROM records WHERE id = ?').bind(ctx.params.id).run();
   await touchDatabase(ctx.env, access.databaseId);
+  await logChanges(ctx.env, access.databaseId, 'delete', [ctx.params.id]);
   return json({ ok: true, total: await countRecords(ctx.env, access.databaseId) });
 }
 
@@ -275,6 +282,7 @@ async function duplicateRecordsHandler(ctx: RequestContext): Promise<Response> {
   }
   if (!created.length) throw notFound('没有找到可复制的记录');
   await touchDatabase(ctx.env, ctx.params.id);
+  await logChanges(ctx.env, ctx.params.id, 'row', created.map((record) => record.id));
   return json(
     { records: created, total: await countRecords(ctx.env, ctx.params.id) },
     { status: 201 },
@@ -294,6 +302,7 @@ async function bulkDeleteHandler(ctx: RequestContext): Promise<Response> {
     .bind(ctx.params.id, ...recordIds)
     .run();
   await touchDatabase(ctx.env, ctx.params.id);
+  await logChanges(ctx.env, ctx.params.id, 'delete', recordIds);
   return json({ deleted: recordIds.length, total: await countRecords(ctx.env, ctx.params.id) });
 }
 

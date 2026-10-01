@@ -1248,6 +1248,137 @@ async function main() {
     `owner=${publicNames.data?.people?.[ownerId] ?? ''} guest=${publicNames.data?.people?.[memberId] ?? ''}`,
   );
 
+  // ------------------------------------------------------- live sync（多人协作）
+  section('live sync (增量同步)');
+  // 打开表格时下发的 `rev` 就是客户端一开始的游标
+  const detailWithRev = await call(`/api/databases/${databaseId}`);
+  check(
+    'table detail carries the version cursor',
+    typeof detailWithRev.data?.rev === 'number',
+    `rev=${detailWithRev.data?.rev}`,
+  );
+
+  // 第一次请求（游标 0）要能拿到一个可用的版本号：客户端就是拿它当起点的
+  const syncStart = await call(`/api/databases/${databaseId}/changes?since=0`);
+  check(
+    'changes starts with a version cursor',
+    syncStart.status === 200 &&
+      typeof syncStart.data?.rev === 'number' &&
+      Array.isArray(syncStart.data?.rows) &&
+      Array.isArray(syncStart.data?.deleted),
+    `rev=${syncStart.data?.rev}`,
+  );
+
+  let syncCursor = syncStart.data?.rev ?? 0;
+  const liveRow = await call(`/api/databases/${databaseId}/records`, {
+    method: 'POST',
+    body: { values: { [titleProperty.id]: '实时同步测试' } },
+  });
+  const liveRowId = liveRow.data?.record?.id;
+  check('create row for live sync', liveRow.status === 201 && Boolean(liveRowId));
+
+  const createdDelta = await call(`/api/databases/${databaseId}/changes?since=${syncCursor}`);
+  check(
+    'new row lands in the delta',
+    createdDelta.data?.reset === false &&
+      (createdDelta.data?.rows ?? []).some((row) => row.id === liveRowId) &&
+      createdDelta.data?.rev > syncCursor,
+    `rev=${createdDelta.data?.rev}`,
+  );
+
+  syncCursor = createdDelta.data?.rev ?? syncCursor;
+  await call(`/api/records/${liveRowId}`, {
+    method: 'PATCH',
+    body: { values: { [titleProperty.id]: '实时同步测试（改）' } },
+  });
+  const patchedDelta = await call(`/api/databases/${databaseId}/changes?since=${syncCursor}`);
+  const patchedRow = (patchedDelta.data?.rows ?? []).find((row) => row.id === liveRowId);
+  check(
+    'updated cell lands in the delta',
+    patchedDelta.data?.reset === false && patchedRow?.values?.[titleProperty.id] === '实时同步测试（改）',
+    `${patchedRow?.values?.[titleProperty.id] ?? '(none)'}`,
+  );
+
+  syncCursor = patchedDelta.data?.rev ?? syncCursor;
+  await call(`/api/records/${liveRowId}/notes`, { method: 'POST', body: { body: '实时同步备注' } });
+  const noteDelta = await call(`/api/databases/${databaseId}/changes?since=${syncCursor}`);
+  check(
+    'new note lands in the delta',
+    noteDelta.data?.reset === false && (noteDelta.data?.notes ?? []).some((note) => note.recordId === liveRowId),
+  );
+
+  syncCursor = noteDelta.data?.rev ?? syncCursor;
+  const idleDelta = await call(`/api/databases/${databaseId}/changes?since=${syncCursor}`);
+  check(
+    'idle delta stays empty',
+    idleDelta.data?.reset === false &&
+      (idleDelta.data?.rows ?? []).length === 0 &&
+      (idleDelta.data?.deleted ?? []).length === 0 &&
+      idleDelta.data?.rev >= syncCursor,
+    `rev=${idleDelta.data?.rev}`,
+  );
+
+  syncCursor = idleDelta.data?.rev ?? syncCursor;
+  await call(`/api/records/${liveRowId}`, { method: 'DELETE' });
+  const deletedDelta = await call(`/api/databases/${databaseId}/changes?since=${syncCursor}`);
+  check(
+    'deleted row lands in the delta',
+    deletedDelta.data?.reset === false &&
+      (deletedDelta.data?.deleted ?? []).includes(liveRowId) &&
+      !(deletedDelta.data?.rows ?? []).some((row) => row.id === liveRowId),
+  );
+
+  // 结构改动（字段改名 / 视图配置）会让客户端整表重载：reset=true
+  syncCursor = deletedDelta.data?.rev ?? syncCursor;
+  await call(`/api/properties/${titleProperty.id}`, {
+    method: 'PATCH',
+    body: { name: `${titleProperty.name} ✓` },
+  });
+  const schemaDelta = await call(`/api/databases/${databaseId}/changes?since=${syncCursor}`);
+  check('structural change asks for a reload', schemaDelta.data?.reset === true, `reset=${schemaDelta.data?.reset}`);
+
+  // 客户端收到 reset 后会整表重载一次，并以新详情里的 rev 作为新游标：
+  // 之后应该又能正常拿到增量（字段名改回去也是一次结构改动，所以先改回再取游标）
+  await call(`/api/properties/${titleProperty.id}`, { method: 'PATCH', body: { name: titleProperty.name } });
+  const reloadedDetail = await call(`/api/databases/${databaseId}`);
+  const healthyDelta = await call(`/api/databases/${databaseId}/changes?since=${reloadedDetail.data?.rev ?? 0}`);
+  check(
+    'delta is healthy again after the reload',
+    typeof reloadedDetail.data?.rev === 'number' && healthyDelta.data?.reset === false,
+    `reset=${healthyDelta.data?.reset}`,
+  );
+
+  // 公开链接一侧也在轮询同一个增量接口（表格里的改动会出现在公开页上）
+  const publicSync = await call(`/api/public/${editToken}/changes?since=0`, { cookie: false });
+  check(
+    'public changes endpoint',
+    publicSync.status === 200 && typeof publicSync.data?.rev === 'number',
+    `rev=${publicSync.data?.rev}`,
+  );
+
+  const publicLive = await call(`/api/databases/${databaseId}/records`, {
+    method: 'POST',
+    body: { values: { [titleProperty.id]: '公开页也能看到' } },
+  });
+  const publicLiveId = publicLive.data?.record?.id;
+  const publicDelta = await call(`/api/public/${editToken}/changes?since=${publicSync.data?.rev ?? 0}`, {
+    cookie: false,
+  });
+  check(
+    'table edit reaches the public page',
+    (publicDelta.data?.rows ?? []).some((row) => row.id === publicLiveId),
+    `${(publicDelta.data?.rows ?? []).length} row(s)`,
+  );
+  if (publicLiveId) await call(`/api/records/${publicLiveId}`, { method: 'DELETE' });
+
+  const syncAnon = await call(`/api/databases/${databaseId}/changes`, { cookie: false });
+  check('changes requires a session', syncAnon.status === 401, `status=${syncAnon.status}`);
+  const syncGone = await call('/api/databases/database-does-not-exist/changes');
+  check('changes 404 for an unknown table', syncGone.status === 404, `status=${syncGone.status}`);
+  const syncBadToken = await call('/api/public/not-a-real-token/changes', { cookie: false });
+  check('public changes 404 for a bad token', syncBadToken.status === 404, `status=${syncBadToken.status}`);
+
+
   // -------------------------------------------------------------------- files
   section('files');
   const form = new FormData();

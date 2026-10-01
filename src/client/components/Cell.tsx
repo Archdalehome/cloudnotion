@@ -52,12 +52,17 @@ interface CellViewProps {
    * 为真时呈现为只读并给出提示，单击也不会进入编辑。
    */
   spent?: boolean;
+  /**
+   * 别人刚改过这个格子（增量同步带回来的）：短暂高亮一下，
+   * 让人一眼看出「哪一格有新数据」。
+   */
+  flash?: boolean;
   onEdit: () => void;
   /** checkbox cells commit on a single click instead of opening an editor */
   onQuickChange?: (next: CellValue | undefined) => void;
 }
 
-export function CellView({ property, row, users, editable, spent, onEdit, onQuickChange }: CellViewProps) {
+export function CellView({ property, row, users, editable, spent, flash, onEdit, onQuickChange }: CellViewProps) {
   const value = row.values[property.id];
 
   if (property.type === 'created_time' || property.type === 'updated_time' || property.type === 'created_by' || property.type === 'updated_by') {
@@ -132,7 +137,7 @@ export function CellView({ property, row, users, editable, spent, onEdit, onQuic
   return (
     <button
       type="button"
-      className={`cell-view${empty ? ' empty' : ''}${spent ? ' spent' : ''}`}
+      className={`cell-view${empty ? ' empty' : ''}${spent ? ' spent' : ''}${flash ? ' flash' : ''}`}
       onClick={start}
       // 「已改过一次」的格子保持可悬停（这样才看得到提示），但点击不再进入编辑
       disabled={!editable && !spent}

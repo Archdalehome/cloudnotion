@@ -6,6 +6,7 @@
  */
 import { accessForRecord } from '../access';
 import { requireUser } from '../auth';
+import { logChanges } from '../changes';
 import { asString, badRequest, json, newId, notFound, readJson, sqlString, type SqlRow } from '../http';
 import { loadInboxMessages, loadNotes, mentionableUserIds, unreadMentionCount } from '../notes';
 import type { RequestContext, Route } from '../types';
@@ -46,6 +47,8 @@ async function createNoteHandler(ctx: RequestContext): Promise<Response> {
     );
   }
   await ctx.env.DB.batch(statements);
+  // 新备注：别人开着的记录卡片不用刷新就会出现（备注只增不改，合并即可）
+  await logChanges(ctx.env, access.databaseId, 'note', [access.recordId]);
 
   return json({ notes: await loadNotes(ctx.env, [access.recordId]) }, { status: 201 });
 }

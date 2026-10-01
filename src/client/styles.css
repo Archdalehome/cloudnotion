@@ -577,6 +577,22 @@ textarea.input {
   opacity: 0.85;
 }
 
+/* 增量同步：别人刚改过的格子闪一下，一眼看出哪儿有新数据（约 2 秒后自动消失） */
+@keyframes cell-flash {
+  0% {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+.cell-view.flash {
+  animation: cell-flash 1.8s ease-out;
+}
+
 /* 首列（PO# 等标题列）右侧的「打开」小方块：鼠标移到该格时出现，点击打开记录卡片 */
 .grid td.cell-view-cell.has-open-btn {
   position: relative;

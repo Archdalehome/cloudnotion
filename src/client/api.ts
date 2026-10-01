@@ -3,6 +3,7 @@
  * Session handling relies on the HttpOnly cookie, hence `credentials: 'same-origin'`.
  */
 import type {
+  DatabaseChanges,
   DatabaseDetail,
   DatabaseSummary,
   FieldType,
@@ -134,6 +135,13 @@ export const api = {
     return json<RecordsPage>(`/api/databases/${id}/records?${query}`, 'GET');
   },
 
+  /**
+   * 增量同步：只取「比 `since` 新的改动」（改过的行 / 删掉的行 / 新备注 / 已用掉的格子）。
+   * 表格页开着的时候每隔几秒轮询一次，别人改的单元格不用刷新页面就会出现。
+   */
+  changes: (id: string, since: number) =>
+    json<DatabaseChanges>(`/api/databases/${id}/changes?since=${Math.max(0, Math.floor(since))}`, 'GET'),
+
   createProperty: (
     databaseId: string,
     body: { name: string; type: FieldType; config?: PropertyConfig; width?: number; position?: number; locked?: boolean },
@@ -229,6 +237,12 @@ export const publicApi = {
     const suffix = query.toString() ? `?${query}` : '';
     return json<PublicDatabaseResponse>(`/api/public/${encodeURIComponent(token)}${suffix}`, 'GET');
   },
+  /** 公开链接页的增量同步（同一套增量逻辑，只是访问权来自分享 token） */
+  changes: (token: string, since: number) =>
+    json<DatabaseChanges>(
+      `/api/public/${encodeURIComponent(token)}/changes?since=${Math.max(0, Math.floor(since))}`,
+      'GET',
+    ),
   createRecord: (token: string, values: RowValues) =>
     json<{ record: RowRecord | null }>(`/api/public/${encodeURIComponent(token)}/records`, 'POST', { values }),
   updateRecord: (token: string, recordId: string, values: RowValues) =>

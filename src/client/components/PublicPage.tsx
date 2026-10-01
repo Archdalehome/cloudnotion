@@ -2,12 +2,15 @@
  * Read-only (or editable, when the share link allows it) public view of a
  * database. Reached through `/share/:token`.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FIELD_META, cellLockHint, cellLockKey, sameCellValue } from '../../shared/fields';
-import type { CellValue, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
+import type { CellValue, DatabaseChanges, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
 import { applyView, visibleProperties } from '../lib/viewEngine';
 import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
+
+/** 增量同步间隔：别人改的格子 / 新建、删除的记录，不刷新页面也会出现在这里 */
+const LIVE_SYNC_POLL_MS = 5_000;
 
 interface PublicPageProps {
   token: string;
@@ -29,24 +32,102 @@ export function PublicPage({ token }: PublicPageProps) {
   // 点击单元格以外的任意位置即退出输入（日期 / 文件字段自动保存，没有「确认」按钮）
   useCloseOnOutsideClick(editing !== null, () => setEditing(null));
 
+  /**
+   * 本地最新的一批行（增量合并基于它）与增量同步游标（看过的最大改动版本号）。
+   */
+  const rowsRef = useRef<RowRecord[]>([]);
+  const revRef = useRef(0);
+  /** 正在飞的本地写请求数：> 0 时轮询先不动本地数据 */
+  const pendingWrites = useRef(0);
+
+  /** 整表加载（首次打开、以及服务端说增量已不可靠时） */
+  const loadAll = useCallback(async () => {
+    const data = await publicApi.database(token, { limit: 200 });
+    setPayload(data);
+    setRows(data.rows);
+    setLockedCells(new Set(data.lockedCells ?? []));
+    setActiveViewId(data.views[0]?.id ?? null);
+    revRef.current = data.rev ?? 0;
+    setError('');
+  }, [token]);
+
   useEffect(() => {
     let cancelled = false;
-    publicApi
-      .database(token, { limit: 200 })
-      .then((data) => {
-        if (cancelled) return;
-        setPayload(data);
-        setRows(data.rows);
-        setLockedCells(new Set(data.lockedCells ?? []));
-        setActiveViewId(data.views[0]?.id ?? null);
-      })
-      .catch((cause) => {
-        if (!cancelled) setError(cause instanceof ApiError ? cause.message : '分享链接无效或已过期');
-      });
+    loadAll().catch((cause) => {
+      if (!cancelled) setError(cause instanceof ApiError ? cause.message : '分享链接无效或已过期');
+    });
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [loadAll]);
+
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  /** 把一轮增量改动合进本地状态：改过的行就地更新、被删掉的行移除、总数跟着变 */
+  const applyChanges = useCallback((changes: DatabaseChanges) => {
+    const gone = new Set(changes.deleted);
+    if (gone.size) {
+      setEditing((prev) => (prev && gone.has(prev.rowId) ? null : prev));
+      setRows((prev) => prev.filter((row) => !gone.has(row.id)));
+    }
+    if (changes.rows.length) {
+      const byId = new Map(rowsRef.current.map((row) => [row.id, row]));
+      for (const record of changes.rows) byId.set(record.id, record);
+      setRows([...byId.values()].sort((a, b) => a.position - b.position));
+    }
+    if (changes.lockedCells.length) {
+      setLockedCells((prev) => {
+        const next = new Set(prev);
+        for (const key of changes.lockedCells) next.add(key);
+        return next;
+      });
+    }
+    setPayload((prev) => (prev ? { ...prev, total: changes.total } : prev));
+  }, []);
+
+  /**
+   * 增量同步：每隔几秒问一次服务端「比我看过的版本号新的是什么」。
+   * 表格协作者（或同一条链接的其他访客）改完单元格，这边不刷新页面就能看到。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let running = false;
+
+    const tick = async () => {
+      if (cancelled || running) return;
+      if (document.visibilityState !== 'visible') return;
+      if (pendingWrites.current > 0) return;
+      running = true;
+      try {
+        const changes = await publicApi.changes(token, revRef.current);
+        if (cancelled) return;
+        if (changes.reset) {
+          await loadAll();
+          return;
+        }
+        if (pendingWrites.current > 0) return;
+        revRef.current = changes.rev;
+        applyChanges(changes);
+      } catch {
+        // 网络抖动：下一轮再试
+      } finally {
+        running = false;
+      }
+    };
+
+    const timer = window.setInterval(() => void tick(), LIVE_SYNC_POLL_MS);
+    const wake = () => void tick();
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [applyChanges, loadAll, token]);
 
   const permission = payload?.database.permission ?? 'view';
   const canEdit = permission === 'edit';
@@ -72,6 +153,17 @@ export function PublicPage({ token }: PublicPageProps) {
     [properties, rows, activeView, filterContext],
   );
 
+  /** 标记一次本地写请求（返回的 release 必须调用）：写入在飞时轮询先不合并远端改动 */
+  const beginWrite = useCallback(() => {
+    pendingWrites.current += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      pendingWrites.current = Math.max(0, pendingWrites.current - 1);
+    };
+  }, []);
+
   const commitCell = useCallback(
     async (row: RowRecord, property: Property, value: CellValue | undefined) => {
       if (!canEdit) return;
@@ -84,6 +176,7 @@ export function PublicPage({ token }: PublicPageProps) {
       }
       // 值没变就不发请求，也不消耗那一次机会（与服务端的判断保持一致）
       if (sameCellValue(row.values[property.id], value)) return;
+      const release = beginWrite();
       setRows((prev) =>
         prev.map((item) => {
           if (item.id !== row.id) return item;
@@ -102,32 +195,40 @@ export function PublicPage({ token }: PublicPageProps) {
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : '保存失败');
         setRows((prev) => prev.map((item) => (item.id === row.id ? row : item)));
+      } finally {
+        release();
       }
     },
-    [canEdit, limitEdits, lockedCells, token],
+    [beginWrite, canEdit, limitEdits, lockedCells, token],
   );
 
   const createRow = useCallback(async () => {
     if (!canEdit) return;
+    const release = beginWrite();
     try {
       const result = await publicApi.createRecord(token, {});
       if (result.record) setRows((prev) => [...prev, result.record!]);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : '新建失败');
+    } finally {
+      release();
     }
-  }, [canEdit, token]);
+  }, [beginWrite, canEdit, token]);
 
   const deleteRow = useCallback(
     async (row: RowRecord) => {
       if (!canEdit) return;
+      const release = beginWrite();
       try {
         await publicApi.deleteRecord(token, row.id);
         setRows((prev) => prev.filter((item) => item.id !== row.id));
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : '删除失败');
+      } finally {
+        release();
       }
     },
-    [canEdit, token],
+    [beginWrite, canEdit, token],
   );
 
 

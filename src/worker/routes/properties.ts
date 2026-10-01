@@ -3,6 +3,7 @@ import { FIELD_META, normalizeCellValue } from '../../shared/fields';
 import type { FieldType, PropertyConfig, RowValues, SelectOption } from '../../shared/types';
 import { accessForProperty, assertStructureEditable, requireDatabaseAccess } from '../access';
 import { requireUser } from '../auth';
+import { logChanges } from '../changes';
 import {
   asEnum,
   asNumberValue,
@@ -174,6 +175,8 @@ async function createPropertyHandler(ctx: RequestContext): Promise<Response> {
     )
     .run();
   await touchDatabase(ctx.env, ctx.params.id);
+  // 结构变了（多 / 少了一个字段）：别人的表格页整表刷新一次
+  await logChanges(ctx.env, ctx.params.id, 'schema');
 
   return json({ properties: await loadProperties(ctx.env, ctx.params.id), propertyId }, { status: 201 });
 }
@@ -235,6 +238,8 @@ async function updatePropertyHandler(ctx: RequestContext): Promise<Response> {
   await ctx.env.DB.prepare(`UPDATE properties SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...values)
     .run();
+  // 字段改名 / 改类型 / 改宽 / 排序 / 锁定：结构改动，别人那边整表重载
+  await logChanges(ctx.env, access.databaseId, 'schema');
 
   let migrated = 0;
   if (typeChanged) {
@@ -286,6 +291,7 @@ async function deletePropertyHandler(ctx: RequestContext): Promise<Response> {
   if (updates.length) await ctx.env.DB.batch(updates);
 
   await touchDatabase(ctx.env, access.databaseId);
+  await logChanges(ctx.env, access.databaseId, 'schema');
   return json({ properties: await loadProperties(ctx.env, access.databaseId) });
 }
 

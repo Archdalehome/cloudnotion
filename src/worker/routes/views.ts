@@ -4,6 +4,7 @@ import type { ViewConfig, ViewDef, ViewType } from '../../shared/types';
 import { defaultViewConfig, mergeViewConfig } from '../../shared/views';
 import { accessForView, assertStructureEditable, assertViewEditable, requireDatabaseAccess } from '../access';
 import { requireUser } from '../auth';
+import { logChanges } from '../changes';
 import {
   asEnum,
   asNumberValue,
@@ -150,6 +151,8 @@ async function createViewHandler(ctx: RequestContext): Promise<Response> {
     .bind(viewId, ctx.params.id, name.slice(0, 80), type, JSON.stringify(config), locked, position, now, now)
     .run();
   await touchDatabase(ctx.env, ctx.params.id);
+  // 多了一个视图：别人的视图栏也跟着刷新
+  await logChanges(ctx.env, ctx.params.id, 'schema');
 
   return json({ views: await loadViews(ctx.env, ctx.params.id), viewId }, { status: 201 });
 }
@@ -174,6 +177,7 @@ async function updateViewHandler(ctx: RequestContext): Promise<Response> {
       .bind(Date.now(), ctx.params.id)
       .run();
     await touchDatabase(ctx.env, access.databaseId);
+    await logChanges(ctx.env, access.databaseId, 'schema');
     return json({ views: await loadViews(ctx.env, access.databaseId) });
   }
 
@@ -217,6 +221,8 @@ async function updateViewHandler(ctx: RequestContext): Promise<Response> {
     params.push(Date.now(), ctx.params.id);
     await ctx.env.DB.prepare(`UPDATE views SET ${fields.join(', ')} WHERE id = ?`).bind(...params).run();
     await touchDatabase(ctx.env, access.databaseId);
+    // 视图改名 / 改筛选 / 排序 / 可见字段 / 锁定：结构改动，别人那边整表重载
+    await logChanges(ctx.env, access.databaseId, 'schema');
   }
 
   return json({ views: await loadViews(ctx.env, access.databaseId) });
@@ -238,6 +244,7 @@ async function deleteViewHandler(ctx: RequestContext): Promise<Response> {
 
   await ctx.env.DB.prepare('DELETE FROM views WHERE id = ?').bind(ctx.params.id).run();
   await touchDatabase(ctx.env, access.databaseId);
+  await logChanges(ctx.env, access.databaseId, 'schema');
   return json({ views: await loadViews(ctx.env, access.databaseId) });
 }
 

@@ -50,6 +50,11 @@ interface TableGridProps {
    * 每个格子只有一次修改机会，改过的格子只读。所有者访问时为空集合。
    */
   lockedCells: ReadonlySet<string>;
+  /**
+   * 别人刚改过、需要短暂高亮的格子（`记录 id:字段 id`），由增量同步写入。
+   * 不传就不高亮（例如公开链接页的只读表格）。
+   */
+  flashCells?: ReadonlySet<string>;
   /** 首列（PO# 等标题列）右侧的「打开」按钮：打开这条记录的卡片 */
   onOpenRecord: (row: RowRecord) => void;
 }
@@ -196,6 +201,7 @@ export function TableGrid(props: TableGridProps) {
     onAddProperty,
     onResizeProperty,
     lockedCells,
+    flashCells,
     onOpenRecord,
   } = props;
 
@@ -364,6 +370,8 @@ export function TableGrid(props: TableGridProps) {
                 const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
                 /** 共享的可编辑用户每个格子只有一次机会，已经用掉的格子只读 */
                 const spent = lockedCells.has(cellLockKey(row.id, property.id));
+                /** 别人刚改过这一格：闪一下，方便一眼看出哪儿有新数据 */
+                const flash = flashCells?.has(cellLockKey(row.id, property.id)) ?? false;
                 /** 首列（PO# 等标题列）承载「打开记录卡片」的小按钮 */
                 const lead = index === 0;
                 return (
@@ -391,6 +399,7 @@ export function TableGrid(props: TableGridProps) {
                         users={users}
                         editable={editable}
                         spent={spent}
+                        flash={flash}
                         onEdit={() => setEditing({ rowId: row.id, propertyId: property.id })}
                         onQuickChange={(value) => onCommitCell(row, property, value)}
                       />
