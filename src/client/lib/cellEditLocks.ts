@@ -35,6 +35,22 @@ function toGraceMap(grace: Record<string, number> | undefined | null): Map<strin
   return new Map(Object.entries(grace ?? {}));
 }
 
+/** 两份锁定集合内容是否一致（避免 reset 用等值的新对象引起多余渲染） */
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const key of a) if (!b.has(key)) return false;
+  return true;
+}
+
+/** 两份纠错窗口内容是否一致（key 与截止时刻都相同才算一致） */
+function sameGrace(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [key, until] of a) if (b.get(key) !== until) return false;
+  return true;
+}
+
 export function useCellEditLocks(initial?: Partial<CellEditLocks> | null): CellEditGuard {
   const [lockedCells, setLockedCells] = useState<ReadonlySet<string>>(
     () => new Set(initial?.lockedCells ?? []),
@@ -119,9 +135,15 @@ export function useCellEditLocks(initial?: Partial<CellEditLocks> | null): CellE
   }, []);
 
   const reset = useCallback((locks: Partial<CellEditLocks> | null | undefined) => {
-    setLockedCells(new Set(locks?.lockedCells ?? []));
-    setGraceUntil(toGraceMap(locks?.cellEditGrace));
-    setClock(Date.now());
+    // 只在内容真的变了才换新对象：整表重载（换表 / reload）每次都会调 reset，
+    // 无条件换新引用会让 `cellGuard` 的引用跟着抖，依赖它的 effect 被反复触发
+    // （症状：刚加载进来的下一页立刻被整表重置顶掉、分页游标退回第一页）。
+    const nextLocked = new Set(locks?.lockedCells ?? []);
+    const nextGrace = toGraceMap(locks?.cellEditGrace);
+    setLockedCells((prev) => (sameSet(prev, nextLocked) ? prev : nextLocked));
+    setGraceUntil((prev) => (sameGrace(prev, nextGrace) ? prev : nextGrace));
+    // 没有窗口记录时不用动时钟：`isSpent` 只看锁定集合，倒计时也没得算
+    if (nextGrace.size) setClock(Date.now());
   }, []);
 
   const markEdited = useCallback((keys: string | string[]) => {

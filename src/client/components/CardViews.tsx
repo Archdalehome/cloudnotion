@@ -4,6 +4,7 @@ import { api } from '../api';
 import type { UserNames } from './Cell';
 import { computedText } from './Cell';
 import type { RowGroup } from '../lib/viewEngine';
+import { LoadMore } from './LoadMore';
 import { Popover } from './Popover';
 
 function textOf(property: Property, row: RowRecord, users: UserNames): string {
@@ -31,9 +32,13 @@ interface BoardProps {
   onOpen: (row: RowRecord) => void;
   onCreateRow: (option: SelectOption | null) => void;
   onMoveRow: (row: RowRecord, groupKey: string) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  /** 取下一页；返回 false 表示这次没取到（由 LoadMore 决定何时重试） */
+  onLoadMore: () => Promise<boolean>;
 }
 
-export function BoardView({ properties, groups, users, view, canEdit, onOpen, onCreateRow, onMoveRow }: BoardProps) {
+export function BoardView({ properties, groups, users, view, canEdit, onOpen, onCreateRow, onMoveRow, hasMore, loadingMore, onLoadMore }: BoardProps) {
   const title = titlePropertyOf(properties);
   const fields = cardFieldsOf(properties, view, title?.id);
 
@@ -102,6 +107,8 @@ export function BoardView({ properties, groups, users, view, canEdit, onOpen, on
           <p>该视图还没有分组，请在「设置 → 分组依据」里选择一个字段。</p>
         </div>
       ) : null}
+
+      <LoadMore hasMore={hasMore} loading={loadingMore} onLoadMore={onLoadMore} />
     </div>
   );
 }
@@ -115,6 +122,10 @@ interface GalleryProps {
   canEdit: boolean;
   onOpen: (row: RowRecord) => void;
   onCreateRow: () => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  /** 取下一页；返回 false 表示这次没取到（由 LoadMore 决定何时重试） */
+  onLoadMore: () => Promise<boolean>;
 }
 
 function imageOf(row: RowRecord, propertyId: string | null | undefined): FileValue | null {
@@ -125,7 +136,7 @@ function imageOf(row: RowRecord, propertyId: string | null | undefined): FileVal
   return files.find((file) => typeof file?.mime === 'string' && file.mime.startsWith('image/')) ?? null;
 }
 
-export function GalleryView({ properties, rows, users, view, canEdit, onOpen, onCreateRow }: GalleryProps) {
+export function GalleryView({ properties, rows, users, view, canEdit, onOpen, onCreateRow, hasMore, loadingMore, onLoadMore }: GalleryProps) {
   const title = titlePropertyOf(properties);
   const fields = cardFieldsOf(properties, view, title?.id).filter((property) => !FIELD_META[property.type].computed);
   const size = view.config.cardSize ?? 'medium';
@@ -178,6 +189,8 @@ export function GalleryView({ properties, rows, users, view, canEdit, onOpen, on
             ＋ 新建
           </button>
         ) : null}
+
+        <LoadMore hasMore={hasMore} loading={loadingMore} onLoadMore={onLoadMore} />
       </div>
 
       {!rows.length ? (

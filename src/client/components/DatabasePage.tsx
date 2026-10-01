@@ -91,6 +91,10 @@ export function DatabasePage({
   const [shareViewId, setShareViewId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState(database.name);
   const [loadingMore, setLoadingMore] = useState(false);
+  /** 已经按顺序从服务端读过的行数：下一页从它往后取（本地增量合并进来的行不算，避免游标偏移） */
+  const loadedCountRef = useRef(database.rows.length);
+  /** 「加载更多」请求正在路上：state 更新是异步的，用它拦住同一帧里的重复触发 */
+  const loadingMoreRef = useRef(false);
   /**
    * 单元格级「限制编辑」的判定器：只有分享时勾选了「限制编辑」的访问者才有内容 ——
    * 每格只有一次修改机会，但第一次保存成功后的 10 秒内还能重新输入 / 修改（纠错窗口，
@@ -117,12 +121,22 @@ export function DatabasePage({
    */
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
 
+  /**
+   * `cellGuard.reset` 的引用是稳定的（内部只 setState），但整个 guard 对象的引用会随
+   * 「10 秒纠错窗口」变化而变。整表重置的 effect 因此只依赖 `database`：否则 guard 一抖，
+   * 这里就会拿服务端首屏把本地已经加载进来的下一页顶掉（分页游标也跟着退回第一页）。
+   */
+  const resetCellGuard = cellGuard.reset;
+
   useEffect(() => {
     setDetail(database);
     setRows(database.rows);
     setTotal(database.total);
     setHasMore(database.hasMore);
-    cellGuard.reset(database);
+    // 换表 / 整页重载：分页游标跟着服务端刚下发的第一页走
+    loadedCountRef.current = database.rows.length;
+    loadingMoreRef.current = false;
+    resetCellGuard(database);
     setNameDraft(database.name);
     setSelectedRowIds([]);
     setFlashCells(new Set());
@@ -131,7 +145,7 @@ export function DatabasePage({
     setActiveViewId((prev) =>
       prev && database.views.some((view) => view.id === prev) ? prev : database.views[0]?.id ?? null,
     );
-  }, [cellGuard, database]);
+  }, [database, resetCellGuard]);
 
   const { properties, views, members } = detail;
   const role: Role = detail.role;
@@ -201,6 +215,7 @@ export function DatabasePage({
       setRows(next.rows);
       setTotal(next.total);
       setHasMore(next.hasMore);
+      loadedCountRef.current = next.rows.length;
       cellGuard.merge(next);
       // 整表重载后游标跟着新数据走（服务端是先给版本号再给数据，所以不会漏改动）
       revRef.current = next.rev ?? 0;
@@ -454,7 +469,7 @@ export function DatabasePage({
       // 别的访客用掉的格子 / 刚改过、还在 10 秒纠错窗口内的格子
       cellGuard.merge(changes);
       setTotal(changes.total);
-      setHasMore(rowsRef.current.length < changes.total);
+      setHasMore(loadedCountRef.current < changes.total);
     },
     [cellGuard, flash, mergeNotes, onToast],
   );
@@ -510,22 +525,36 @@ export function DatabasePage({
 
   /* ------------------------------------------------------------------- rows */
 
-  const loadMore = async () => {
-    if (loadingMore || !hasMore) return;
+  /**
+   * 取下一页（滚动到底时由 LoadMore 自动触发，见 components/LoadMore.tsx）。
+   * 游标用 `loadedCountRef`（已经按顺序读过的服务端行数）而不是本地 `rows.length`：
+   * 增量同步会把别人改过 / 新建的行合并进本地，行数比「读过的行数」多，
+   * 直接拿它当 offset 会跳过中间还没读过的记录。
+   */
+  const loadMore = useCallback(async (): Promise<boolean> => {
+    // 已经在飞 / 没有下一页：当作「不用再取」处理，哨兵不会因此进入失败退避
+    if (loadingMoreRef.current || !hasMore) return true;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const page = await api.rows(detail.id, { limit: PAGE_SIZE, offset: rows.length });
+      const page = await api.rows(detail.id, { limit: PAGE_SIZE, offset: loadedCountRef.current });
+      loadedCountRef.current += page.rows.length;
       setRows((prev) => [...prev, ...page.rows.filter((row) => !prev.some((item) => item.id === row.id))]);
       setTotal(page.total);
-      setHasMore(page.hasMore);
+      // 服务端没给出新行时（并发删除等）直接停住：免得自动加载反复请求同一页
+      setHasMore(page.hasMore && page.rows.length > 0);
       cellGuard.merge(page);
       mergeNotes(page.notes);
+      return true;
     } catch (cause) {
       fail(cause, '加载更多失败');
+      // 返回 false：LoadMore 会退避之后再试，失败就立刻重试会变成请求风暴
+      return false;
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  };
+  }, [cellGuard, detail.id, fail, hasMore, mergeNotes]);
 
   const createRow = async (preset?: Record<string, CellValue>) => {
     if (!canEdit) return;
@@ -1016,6 +1045,9 @@ export function DatabasePage({
             properties={properties}
             groups={groups}
             users={users}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={loadMore}
             view={activeView}
             canEdit={canEdit}
             onOpen={(row) => openRecord(row.id)}
@@ -1035,6 +1067,9 @@ export function DatabasePage({
           <GalleryView
             properties={properties}
             rows={filtered}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={loadMore}
             users={users}
             view={activeView}
             canEdit={canEdit}
@@ -1055,7 +1090,8 @@ export function DatabasePage({
             onSelectionChange={setSelectedRowIds}
             rowHeight={activeView?.config.rowHeight ?? 'short'}
             hasMore={hasMore}
-            onLoadMore={() => void loadMore()}
+            loadingMore={loadingMore}
+            onLoadMore={loadMore}
             onCreateRow={() => void createRow()}
             onCommitCell={commitCell}
             uploadFile={uploadFile}

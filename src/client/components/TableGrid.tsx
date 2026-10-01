@@ -3,6 +3,7 @@ import { FIELD_META, cellLockKey } from '../../shared/fields';
 import type { CellValue, FileValue, Property, RowRecord, SortRule, ViewConfig } from '../../shared/types';
 import type { CellEditGuard } from '../lib/cellEditLocks';
 import { CellEditor, CellView, useCloseOnOutsideClick, type UserNames } from './Cell';
+import { LoadMore } from './LoadMore';
 import { Popover } from './Popover';
 
 type RowHeight = NonNullable<ViewConfig['rowHeight']>;
@@ -26,7 +27,10 @@ interface TableGridProps {
   onSelectionChange: (ids: string[]) => void;
   rowHeight: RowHeight;
   hasMore: boolean;
-  onLoadMore: () => void;
+  /** 下一页正在路上：滚动到底自动加载（见 LoadMore），加载中不重复触发 */
+  loadingMore: boolean;
+  /** 取下一页；返回 false 表示这次没取到（哨兵会退避后再试，见 LoadMore） */
+  onLoadMore: () => Promise<boolean>;
   onCreateRow: () => void;
   onCommitCell: (row: RowRecord, property: Property, value: CellValue | undefined) => void;
   uploadFile: (row: RowRecord, property: Property, file: File) => Promise<FileValue>;
@@ -194,6 +198,7 @@ export function TableGrid(props: TableGridProps) {
     onSelectionChange,
     rowHeight,
     hasMore,
+    loadingMore,
     onLoadMore,
     onCreateRow,
     onCommitCell,
@@ -262,16 +267,6 @@ export function TableGrid(props: TableGridProps) {
 
   return (
     <div className="grid-wrap">
-      {/* 勾选记录后的批量操作栏已移到「＋ 新建筛选」后面的工具栏（见 DatabasePage） */}
-      {hasMore ? (
-        <div className="grid-toolbar">
-          <span className="spacer" />
-          <button type="button" className="btn small" onClick={onLoadMore}>
-            加载更多
-          </button>
-        </div>
-      ) : null}
-
       <table className="grid" style={{ minWidth: totalWidth }}>
         <colgroup>
           <col style={{ width: 44 }} />
@@ -435,6 +430,8 @@ export function TableGrid(props: TableGridProps) {
           ) : null}
         </tbody>
       </table>
+
+      <LoadMore hasMore={hasMore} loading={loadingMore} onLoadMore={onLoadMore} />
 
       {!rows.length ? (
         <div className="empty-state">
