@@ -483,7 +483,7 @@ export async function buildDatabaseDetail(
   // 「创建人 / 最后编辑人」取自行元数据，可能指向并非成员的定向分享用户
   const people = await loadPeopleNames(env, page.rows);
   // 勾选了「限制编辑」的访问者的单元格锁定状态（其它人恒为空 —— 不受限制）：
-  // 已经过了 10 秒纠错窗口的格子彻底只读，窗口内的格子（cellEditGrace）还能再改
+  // 计时窗口已过、又仍有内容的格子只读，窗口内的格子（cellEditGrace）还能再改
   const cellLocks = await loadCellEditLocks(
     env,
     databaseId,
@@ -520,10 +520,10 @@ export async function buildDatabaseDetail(
     total: page.total,
     hasMore: offset + page.rows.length < page.total,
     people,
-    // 已经彻底锁上的格子 + 还在 10 秒纠错窗口内的格子
+    // 已经锁上的格子 + 还在 10 秒计时窗口内的格子
     ...cellLocks,
     notes,
-    // 分享时勾选的「限制编辑」：前端据此把改过的格子标成只读
+    // 分享时勾选的「限制编辑」：前端据此把锁上的格子标成只读
     limitCellEdits: access.limitCellEdits,
   };
 }
@@ -612,7 +612,7 @@ async function recordsPageHandler(ctx: RequestContext): Promise<Response> {
   const limit = clampLimit(ctx.url);
   const offset = clampOffset(ctx.url);
   const { rows, total } = await visibleRecords(ctx.env, ctx.params.id, access, limit, offset);
-  // 已经过了纠错窗口的格子 + 还在 10 秒窗口内的格子（不受限制的访问者恒为空）
+  // 计时窗口已过且仍有内容的格子 + 还在 10 秒窗口内的格子（不受限制的访问者恒为空）
   const cellLocks = await loadCellEditLocks(
     ctx.env,
     ctx.params.id,

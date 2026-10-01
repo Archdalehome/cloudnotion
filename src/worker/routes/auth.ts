@@ -6,6 +6,7 @@ import {
   destroySession,
   getCurrentUser,
   hashPassword,
+  isSecureRequest,
   sessionCookie,
   validatePasswordStrength,
   verifyPassword,
@@ -64,7 +65,7 @@ async function registerHandler(ctx: RequestContext): Promise<Response> {
   const { token } = await createSession(env, userId);
   const response = json(
     { user: { id: userId, email, name } },
-    { status: 201, headers: { 'set-cookie': sessionCookie(token) } },
+    { status: 201, headers: { 'set-cookie': sessionCookie(token, isSecureRequest(ctx.request)) } },
   );
   return response;
 }
@@ -86,14 +87,14 @@ async function loginHandler(ctx: RequestContext): Promise<Response> {
   const { token } = await createSession(env, userId);
   return json(
     { user: { id: userId, email: sqlString(row, 'email'), name: sqlString(row, 'name') } },
-    { headers: { 'set-cookie': sessionCookie(token) } },
+    { headers: { 'set-cookie': sessionCookie(token, isSecureRequest(ctx.request)) } },
   );
 }
 
 async function logoutHandler(ctx: RequestContext): Promise<Response> {
   const token = getCookie(ctx.request, SESSION_COOKIE);
   if (token) await destroySession(ctx.env, token);
-  return json({ ok: true }, { headers: { 'set-cookie': clearedSessionCookie() } });
+  return json({ ok: true }, { headers: { 'set-cookie': clearedSessionCookie(isSecureRequest(ctx.request)) } });
 }
 
 async function sessionHandler(ctx: RequestContext): Promise<Response> {

@@ -4,11 +4,11 @@ import type { Property, RowRecord, RowValues } from '../../shared/types';
 import { accessForRecord, requireDatabaseAccess } from '../access';
 import { requireUser } from '../auth';
 import {
+  applyCellEdits,
   assertCellsEditable,
   changedPropertyIds,
   loadCellEditLocks,
   memberCellEditKey,
-  rememberCellEdits,
 } from '../cellEdits';
 import { logChanges } from '../changes';
 import {
@@ -213,8 +213,8 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
           throw badRequest(`字段「${property.name}」已锁定，无法修改`);
         });
 
-  // 单元格级「限制编辑」：勾选了「限制编辑」的分享改过的格子不能再改
-  // （表格所有者 / 表格成员 / 没勾选的分享 editorKey 为 null，直接放行）
+  // 单元格级「限制编辑」：勾选了「限制编辑」的分享在「保存后 10 秒、这一格仍有
+  // 内容」之后不能再改（表格所有者 / 表格成员 / 没勾选的分享 editorKey 为 null，直接放行）
   const editorKey = memberCellEditKey(access);
   const changed = body.values === undefined
     ? []
@@ -231,8 +231,8 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
   await ctx.env.DB.prepare(`UPDATE records SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...params)
     .run();
-  // 写入成功之后才登记，避免失败的请求白白消耗机会
-  await rememberCellEdits(ctx.env, access.databaseId, editorKey, ctx.params.id, changed);
+  // 写入成功之后才记账：值非空开始 / 刷新 10 秒计时，值被清空则删掉记账（= 没输入过）
+  await applyCellEdits(ctx.env, access.databaseId, editorKey, ctx.params.id, changed, values);
   await touchDatabase(ctx.env, access.databaseId);
   // 顺序很重要：数据先落库、日志后写（见 worker/changes.ts 的文件头）
   await logChanges(ctx.env, access.databaseId, 'row', [ctx.params.id]);
@@ -241,7 +241,7 @@ async function updateRecordHandler(ctx: RequestContext): Promise<Response> {
     record: await loadRecord(ctx.env, ctx.params.id),
     total: await countRecords(ctx.env, access.databaseId),
     // 受限访问者（勾了「限制编辑」的分享）拿到这一行最新的锁定状态：
-    // cellEditGrace 给出这次改过的格子 10 秒纠错窗口的截止时刻
+    // cellEditGrace 给出这次改过的格子 10 秒计时窗口的截止时刻（值为空的格子不会出现）
     ...(await loadCellEditLocks(ctx.env, access.databaseId, editorKey, [ctx.params.id])),
   });
 }
@@ -319,7 +319,7 @@ async function pageHandler(ctx: RequestContext): Promise<Response> {
     loadRecords(ctx.env, ctx.params.id, limit, offset),
     countRecords(ctx.env, ctx.params.id),
   ]);
-  // 已经过了纠错窗口的格子 + 还在 10 秒窗口内的格子（不受限制的访问者恒为空）
+  // 保存过、计时窗口已过、且仍有内容的格子 + 还在 10 秒窗口内的格子（不受限制的访问者恒为空）
   const cellLocks = await loadCellEditLocks(
     ctx.env,
     ctx.params.id,

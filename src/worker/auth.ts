@@ -142,17 +142,30 @@ export async function requireUser(request: Request, env: Env): Promise<AuthedUse
   return user;
 }
 
-export function sessionCookie(token: string): string {
+/**
+ * 这次请求是不是走的安全协议（决定会话 cookie 要不要带 `Secure`）。
+ *
+ * `Secure` 的 cookie 在 http 页面上会被浏览器**直接丢弃**（`localhost` 是特例，
+ * 所以本机开发时看不出问题）—— 手机通过局域网 IP（`http://192.168.x.x:...`）
+ * 访问时就会「登录接口返回 200，但会话没保存下来」，看起来像登录失败。
+ * 所以只有 https（含反向代理透传的 `x-forwarded-proto`）才加 `Secure`。
+ */
+export function isSecureRequest(request: Request): boolean {
+  if (new URL(request.url).protocol === 'https:') return true;
+  return (request.headers.get('x-forwarded-proto') ?? '').toLowerCase().startsWith('https');
+}
+
+export function sessionCookie(token: string, secure = true): string {
   return serializeCookie(SESSION_COOKIE, token, {
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
     httpOnly: true,
-    secure: true,
+    secure,
     sameSite: 'Lax',
   });
 }
 
-export function clearedSessionCookie(): string {
-  return serializeCookie(SESSION_COOKIE, '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'Lax' });
+export function clearedSessionCookie(secure = true): string {
+  return serializeCookie(SESSION_COOKIE, '', { maxAge: 0, httpOnly: true, secure, sameSite: 'Lax' });
 }
 
 /* ---------------------------------------------------------------- helpers */

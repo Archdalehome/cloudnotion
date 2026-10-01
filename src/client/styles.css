@@ -75,6 +75,8 @@ button {
   place-items: center;
   height: 100%;
   padding: 24px;
+  /* 手机上软键盘弹出后可视高度会明显变小：允许纵向滚动，按钮不会被顶出屏幕 */
+  overflow-y: auto;
 }
 
 .page-title {
@@ -571,7 +573,7 @@ textarea.input {
   color: var(--text);
 }
 
-/* 「限制编辑」：已经改过的格子保持可悬停（提示为什么不能改），但不再可编辑 */
+/* 「限制编辑」：已经锁上的格子保持可悬停（提示为什么不能改），但不再可编辑 */
 .cell-view.spent {
   cursor: default;
   opacity: 0.85;
@@ -1567,6 +1569,19 @@ textarea.input {
 /* --------------------------------------------- 窄屏 / 手机适配（≤900px） */
 
 @media (max-width: 900px) {
+  /* 登录 / 欢迎页从顶部开始排：键盘弹起时输入框与提交按钮仍可见、可点 */
+  .centered {
+    place-items: start center;
+    padding: 16px;
+  }
+
+  /* iOS Safari 对字号 ≤16px 的输入框会自动整页放大，锁到 16px 就不会被放大 */
+  .input,
+  select.input,
+  textarea.input {
+    font-size: 16px;
+  }
+
   /* 侧边栏改成抽屉：默认收起，横屏/竖屏都不再挤占表格宽度 */
   .sidebar {
     position: fixed;

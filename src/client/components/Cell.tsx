@@ -49,12 +49,13 @@ interface CellViewProps {
   /** 这个格子是否允许编辑（访问权 + 字段锁 + 字段类型都会影响它） */
   editable: boolean;
   /**
-   * 该格子已经被当前访问者改过一次、且 10 秒纠错窗口已经关了（共享的可编辑用户
-   * 每个格子只有一次机会）。为真时呈现为只读并给出提示，单击也不会进入编辑。
+   * 该格子已经被当前访问者填过内容、10 秒计时窗口已经关了，而且值还在
+   * （只有勾了「限制编辑」的分享才有这个约束）。为真时呈现为只读并给出提示，
+   * 单击也不会进入编辑。
    */
   spent?: boolean;
   /**
-   * 这一格还在纠错窗口内时窗口的剩余毫秒数（> 0 = 刚刚保存过，窗口内还能再改）。
+   * 这一格还在计时窗口内时窗口的剩余毫秒数（> 0 = 刚刚保存过，窗口内还能继续改）。
    * 悬停提示里会带上倒计时的秒数。
    */
   graceMsLeft?: number;
@@ -155,10 +156,10 @@ export function CellView({
       type="button"
       className={`cell-view${empty ? ' empty' : ''}${spent ? ' spent' : ''}${flash ? ' flash' : ''}`}
       onClick={start}
-      // 「已改过一次」的格子保持可悬停（这样才看得到提示），但点击不再进入编辑
+      // 已经锁上的格子保持可悬停（这样才看得到提示），但点击不再进入编辑
       disabled={!editable && !spent}
       aria-disabled={startable ? undefined : true}
-      // 还在 10 秒纠错窗口里：提示「还能再改几秒」；窗口一关换成「联系表格所有者」
+      // 还在 10 秒计时窗口里：提示「还能继续改几秒」；窗口一关换成「联系表格所有者」
       title={
         spent ? cellLockHint(property.name) : graceMsLeft ? cellGraceHint(property.name, graceMsLeft) : undefined
       }

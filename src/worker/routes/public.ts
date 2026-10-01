@@ -2,10 +2,10 @@
 import type { PublicDatabaseResponse } from '../../shared/types';
 import { resolveShareToken, type ShareAccess } from '../access';
 import {
+  applyCellEdits,
   assertCellsEditable,
   changedPropertyIds,
   loadCellEditLocks,
-  rememberCellEdits,
   shareCellEditKey,
 } from '../cellEdits';
 import { headRev, loadChanges, logChanges } from '../changes';
@@ -61,7 +61,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
   ]);
   // 公开链接也要能显示「创建人 / 最后编辑人」的姓名（表格所有者 + 协作者）
   const people = await loadPeopleNames(ctx.env, rows);
-  // 通过该分享链接改过的格子：彻底只读的 + 还在 10 秒纠错窗口内的（勾了「限制编辑」才有）
+  // 通过该分享链接改过的格子：只读的 + 还在 10 秒计时窗口内的（勾了「限制编辑」才有）
   const cellLocks = await loadCellEditLocks(
     ctx.env,
     share.databaseId,
@@ -76,7 +76,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
       icon: sqlString(row, 'icon', '📋'),
       description: sqlString(row, 'description'),
       permission: share.permission,
-      // 创建链接时勾选的「限制编辑」：每个格子只能改一次
+      // 创建链接时勾选的「限制编辑」：输入不限次数，保存后 10 秒这一格才锁上
       limitEdits: share.limitEdits,
       ownerId: sqlString(row, 'owner_id'),
       ownerName: sqlString(row, 'owner_name'),
@@ -88,7 +88,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
     hasMore: offset + rows.length < total,
     rev,
     people,
-    // 彻底只读的格子 + 还在 10 秒纠错窗口内的格子
+    // 只读的格子 + 还在 10 秒计时窗口内的格子
     ...cellLocks,
   };
   return json(payload);
@@ -147,8 +147,8 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
           throw badRequest(`字段「${property.name}」已锁定，无法修改`);
         });
 
-  // 单元格级「限制编辑」：这条分享链接勾了「限制编辑」时，改过的格子不能再改
-  // （值没变的请求不受影响；没勾选时 editorKey 为 null，下面两个调用直接放行）
+  // 单元格级「限制编辑」：这条分享链接勾了「限制编辑」时，保存后 10 秒且这一格仍有
+  // 内容的格子不能再改（值没变、值为空的请求都不受影响；没勾选时 editorKey 为 null，直接放行）
   const editorKey = shareCellEditKey(share);
   const changed = body.values === undefined
     ? []
@@ -165,8 +165,8 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
   await ctx.env.DB.prepare(`UPDATE records SET ${fields.join(', ')} WHERE id = ?`)
     .bind(...params)
     .run();
-  // 写入成功之后才登记，避免失败的请求白白消耗机会
-  await rememberCellEdits(ctx.env, share.databaseId, editorKey, ctx.params.recordId, changed);
+  // 写入成功之后才记账：值非空开始 / 刷新 10 秒计时，值被清空则删掉记账（= 没输入过）
+  await applyCellEdits(ctx.env, share.databaseId, editorKey, ctx.params.recordId, changed, values);
   await touchDatabase(ctx.env, share.databaseId);
   // 通过分享链接改的格子：表格里的协作者几秒内就能看到
   await logChanges(ctx.env, share.databaseId, 'row', [ctx.params.recordId]);
@@ -174,7 +174,7 @@ async function publicUpdateRecordHandler(ctx: RequestContext): Promise<Response>
   const updated = await ctx.env.DB.prepare('SELECT * FROM records WHERE id = ?')
     .bind(ctx.params.recordId)
     .first<SqlRow>();
-  // 这一行最新的锁定状态：cellEditGrace = 刚改过的格子 10 秒纠错窗口的截止时刻
+  // 这一行最新的锁定状态：cellEditGrace = 刚改过的格子 10 秒计时窗口的截止时刻
   const cellLocks = await loadCellEditLocks(ctx.env, share.databaseId, editorKey, [ctx.params.recordId]);
   return json({ record: updated ? recordFromRow(updated) : null, ...cellLocks });
 }

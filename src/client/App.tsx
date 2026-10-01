@@ -302,7 +302,7 @@ export function App() {
       setDetailReloadKey((value) => value + 1);
       void bootstrapSession().then((payload) => {
         if (!payload?.user) {
-          toast('登录状态未能保存：请允许浏览器使用 Cookie，并使用 https 地址访问后重试', 'error');
+          toast('登录状态未能保存：请检查浏览器是否允许使用 Cookie（无痕模式或「阻止所有 Cookie」会导致无法登录）', 'error');
         }
       });
     },

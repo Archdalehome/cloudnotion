@@ -157,7 +157,7 @@ export async function loadChanges(
     loadNotes(env, [...notedRows]),
     countRecords(env, databaseId),
   ]);
-  // 这一轮改动里的单元格锁定状态：彻底只读的格子 + 还在 10 秒纠错窗口内的格子
+  // 这一轮改动里的单元格锁定状态：只读的格子 + 还在 10 秒计时窗口内的格子
   const cellLocks = await loadCellEditLocks(
     env,
     databaseId,

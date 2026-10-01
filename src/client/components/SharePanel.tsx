@@ -145,7 +145,7 @@ function ShareViews({
                 <div className="small muted">
                   {share.name ? `${share.name} · ` : ''}
                   {ROLE_LABEL[share.role]}
-                  {share.limitEdits ? ' · 限制编辑（每个格子只能改一次）' : ''}
+                  {share.limitEdits ? ' · 限制编辑（输入后 10 秒内可改，之后只读）' : ''}
                 </div>
               </div>
               <button type="button" className="btn ghost small" disabled={busy} onClick={() => onRemove(share)}>
@@ -203,7 +203,7 @@ function ShareViews({
             onChange={(event) => onLimitEdits(event.target.checked)}
           />
           <span className="small">
-            限制编辑：被分享者对每个格子只有一次输入机会（保存成功后 10 秒内还能改回来），之后该格子只能查看
+            限制编辑：被分享者可以反复输入，但每次保存后 10 秒内还能继续修改，之后该格子只能查看（把内容清空则视为没有输入过，不受限制）
           </span>
         </label>
       ) : null}

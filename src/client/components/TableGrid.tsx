@@ -51,8 +51,8 @@ interface TableGridProps {
   onSortProperty: (property: Property, direction: 'asc' | 'desc') => void;
   onFilterProperty: (property: Property) => void;
   /**
-   * 单元格级「限制编辑」的判定器：共享给可编辑成员 / 公开链接时每个格子只有一次
-   * 修改机会，改过且过了 10 秒纠错窗口的格子只读；所有者访问时不受限制。
+   * 单元格级「限制编辑」的判定器：共享给可编辑成员 / 公开链接时输入不限次数，
+   * 但保存后 10 秒、且这一格仍有内容时只读；所有者访问时不受限制。
    */
   cellGuard: CellEditGuard;
   /**
@@ -364,7 +364,7 @@ export function TableGrid(props: TableGridProps) {
               {properties.map((property, index) => {
                 const isEditing = editing?.rowId === row.id && editing.propertyId === property.id;
                 const editable = canEdit && !FIELD_META[property.type].computed && !property.locked;
-                /** 共享的可编辑用户每个格子只有一次机会；10 秒纠错窗口内还能再改 */
+                /** 共享的可编辑用户输入不限次数，但保存后 10 秒这一格才锁上；窗口内还能改 */
                 const spent = cellGuard.isSpent(row.id, property.id);
                 const graceMsLeft = cellGuard.graceLeftMs(row.id, property.id);
                 /** 别人刚改过这一格：闪一下，方便一眼看出哪儿有新数据 */

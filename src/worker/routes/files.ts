@@ -89,7 +89,7 @@ async function uploadHandler(ctx: RequestContext): Promise<Response> {
     if (property && sqlNumber(property, 'is_locked') === 1) {
       throw forbidden(`字段「${sqlString(property, 'name')}」已锁定，无法上传文件`);
     }
-    // 单元格级「限制编辑」：已经改过的格子不再接受新的上传
+    // 单元格级「限制编辑」：已经锁上的格子（计时窗口已过、仍有内容）不再接受新的上传
     if (recordId && property && (await isCellLocked(ctx.env, databaseId, editorKey, recordId, propertyId))) {
       throw forbidden(cellLockHint(sqlString(property, 'name')));
     }
@@ -196,7 +196,7 @@ async function deleteHandler(ctx: RequestContext): Promise<Response> {
       if (property && sqlNumber(property, 'is_locked') === 1) {
         throw forbidden(`字段「${sqlString(property, 'name')}」已锁定，无法删除附件`);
       }
-      // 单元格级「限制编辑」：已经改过的格子不再允许删除附件
+      // 单元格级「限制编辑」：已经锁上的格子（计时窗口已过、仍有内容）不再允许删除附件
       const recordId = sqlString(row, 'record_id');
       if (
         recordId

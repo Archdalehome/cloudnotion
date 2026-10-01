@@ -1,10 +1,11 @@
 /**
  * 单元格级「限制编辑」的客户端状态。
  *
- * 勾选了「限制编辑」的分享（公开链接 / 视图定向分享）对每一格只有一次修改机会，
- * 但**第一次保存成功后的 10 秒内**还允许重新输入 / 修改 —— 给一次「刚填完就发现
- * 写错了」的改正机会。窗口从第一次保存成功的那一刻起算，不因为窗口内的再次修改
- * 而延长（与 Worker 的判断一致）：10 秒一到这一格就彻底只读，只能请表格所有者代改。
+ * 勾选了「限制编辑」的分享（公开链接 / 视图定向分享）对每一格的输入**次数不限**，
+ * 但每次保存成功后都要等 **10 秒**才会锁上：窗口内想改多少遍都行；窗口一到，只要
+ * 这一格仍然有内容就只读（只能请表格所有者代改）；而在这 10 秒内把内容清空则等于
+ * 「没输入过」—— 计时取消、这一格恢复可编辑。窗口从**最近一次保存成功**起算，
+ * 与 Worker 的判断完全一致。
  *
  * 服务端是权威，它每次下发数据时都给出两样东西（见 `shared/types.ts` 的
  * `CellEditLocks`）：
@@ -19,16 +20,18 @@ import type { CellEditLocks } from '../../shared/types';
 
 /** 界面只关心「这一格现在能不能点开改」和「窗口还剩几秒」 */
 export interface CellEditGuard {
-  /** 现在这一刻这一格是否已经只读（改过、且 10 秒纠错窗口已经关了） */
+  /** 现在这一刻这一格是否已经只读（保存过、10 秒计时窗口已经关了、值还在） */
   isSpent(recordId: string, propertyId: string): boolean;
-  /** 这一格的纠错窗口还剩多少毫秒（0 = 不在窗口里 / 已经到期） */
+  /** 这一格的计时窗口还剩多少毫秒（0 = 不在窗口里 / 已经到期） */
   graceLeftMs(recordId: string, propertyId: string): number;
   /** 把服务端下发的锁定状态并进本地（只增不减，服务端说了算） */
   merge(locks: Partial<CellEditLocks> | null | undefined): void;
   /** 整表重载 / 换表格：用服务端刚下发的状态覆盖本地 */
   reset(locks: Partial<CellEditLocks> | null | undefined): void;
-  /** 本地乐观登记：刚保存成功的格子（只在还没有窗口记录时才起算 10 秒） */
+  /** 本地乐观登记：刚保存成功的格子（每次保存都重新起算 10 秒） */
   markEdited(keys: string | string[]): void;
+  /** 本地乐观清除：刚被清空的格子（视为没输入过，窗口与只读状态一起撤销） */
+  clearCells(keys: string | string[]): void;
 }
 
 function toGraceMap(grace: Record<string, number> | undefined | null): Map<string, number> {
@@ -43,7 +46,7 @@ function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return true;
 }
 
-/** 两份纠错窗口内容是否一致（key 与截止时刻都相同才算一致） */
+/** 两份计时窗口内容是否一致（key 与截止时刻都相同才算一致） */
 function sameGrace(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
   if (a === b) return true;
   if (a.size !== b.size) return false;
@@ -62,7 +65,7 @@ export function useCellEditLocks(initial?: Partial<CellEditLocks> | null): CellE
   const [clock, setClock] = useState(() => Date.now());
 
   /**
-   * 有格子还在纠错窗口里时，每秒推进一次 `clock`：
+   * 有格子还在计时窗口里时，每秒推进一次 `clock`：
    * 一是让「还剩 N 秒」的提示是活的，二是窗口一到就把该格判成只读。
    * 没有窗口记录时这个 effect 什么都不做，不会带来任何额外渲染。
    */
@@ -154,11 +157,32 @@ export function useCellEditLocks(initial?: Partial<CellEditLocks> | null): CellE
       let changed = false;
       const next = new Map(prev);
       for (const key of list) {
-        // 已经在窗口里就不动它：窗口始终从第一次保存成功的那一刻起算
-        if (next.has(key)) continue;
+        // 每次保存都重新开始计时：窗口从最近一次输入的那一刻算起
+        if (next.get(key) === until) continue;
         next.set(key, until);
         changed = true;
       }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  /**
+   * 刚把这一格清空：撤销它的窗口与只读状态（等于没输入过）。
+   * 服务端把记账删掉了，所以之后再输入会重新开始计时。
+   */
+  const clearCells = useCallback((keys: string | string[]) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    if (!list.length) return;
+    setGraceUntil((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const key of list) if (next.delete(key)) changed = true;
+      return changed ? next : prev;
+    });
+    setLockedCells((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const key of list) if (next.delete(key)) changed = true;
       return changed ? next : prev;
     });
   }, []);
@@ -167,7 +191,7 @@ export function useCellEditLocks(initial?: Partial<CellEditLocks> | null): CellE
     (recordId: string, propertyId: string): boolean => {
       const key = cellLockKey(recordId, propertyId);
       const until = graceUntil.get(key);
-      // 还在纠错窗口内：可以重新输入 / 修改
+      // 还在计时窗口内：可以继续重新输入 / 修改
       if (until !== undefined && until > clock) return false;
       return lockedCells.has(key) || until !== undefined;
     },
@@ -183,7 +207,7 @@ export function useCellEditLocks(initial?: Partial<CellEditLocks> | null): CellE
   );
 
   return useMemo<CellEditGuard>(
-    () => ({ isSpent, graceLeftMs, merge, reset, markEdited }),
-    [graceLeftMs, isSpent, markEdited, merge, reset],
+    () => ({ isSpent, graceLeftMs, merge, reset, markEdited, clearCells }),
+    [clearCells, graceLeftMs, isSpent, markEdited, merge, reset],
   );
 }

@@ -3,7 +3,7 @@
  * database. Reached through `/share/:token`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FIELD_META, cellLockHint, cellLockKey, sameCellValue } from '../../shared/fields';
+import { FIELD_META, cellLockHint, cellLockKey, isEmptyValue, sameCellValue } from '../../shared/fields';
 import type { CellValue, DatabaseChanges, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
 import { useCellEditLocks } from '../lib/cellEditLocks';
@@ -25,8 +25,8 @@ export function PublicPage({ token }: PublicPageProps) {
   const [editing, setEditing] = useState<{ rowId: string; propertyId: string } | null>(null);
   /**
    * 单元格级「限制编辑」的判定器。只有创建链接时勾选了「限制编辑」才有内容：
-   * 每格只有一次机会（谁先改谁用掉），但第一次保存成功后的 10 秒内还能重新输入 /
-   * 修改（纠错窗口），窗口一过所有通过该链接访问的人都只能看。
+   * 输入次数不限，但每次保存后要等 10 秒这一格才会锁上（计时窗口，窗口内想改多少遍
+   * 都行，每次保存重新计时）；窗口一到、并且这一格仍有内容时就只能查看。
    */
   const cellGuard = useCellEditLocks();
 
@@ -78,7 +78,7 @@ export function PublicPage({ token }: PublicPageProps) {
       for (const record of changes.rows) byId.set(record.id, record);
       setRows([...byId.values()].sort((a, b) => a.position - b.position));
     }
-    // 别的访客用掉的格子 / 刚改过、还在 10 秒纠错窗口内的格子
+    // 别的访客锁上的格子 / 刚改过、还在 10 秒计时窗口内的格子
     cellGuard.merge(changes);
     setPayload((prev) => (prev ? { ...prev, total: changes.total } : prev));
   }, [cellGuard]);
@@ -127,7 +127,7 @@ export function PublicPage({ token }: PublicPageProps) {
 
   const permission = payload?.database.permission ?? 'view';
   const canEdit = permission === 'edit';
-  /** 创建链接时勾选了「限制编辑」：每个格子只能改一次 */
+  /** 创建链接时勾选了「限制编辑」：输入不限次数，保存后 10 秒这一格才锁上 */
   const limitEdits = payload?.database.limitEdits === true;
   const properties = payload?.properties ?? [];
   const activeView = useMemo(
@@ -164,13 +164,13 @@ export function PublicPage({ token }: PublicPageProps) {
     async (row: RowRecord, property: Property, value: CellValue | undefined) => {
       if (!canEdit) return;
       const cellKey = cellLockKey(row.id, property.id);
-      // 勾选了「限制编辑」的链接每格只有一次机会：改过、且过了 10 秒纠错窗口的格子只读，
+      // 勾选了「限制编辑」的链接：保存过、10 秒计时窗口已过且这一格仍有内容就只读，
       // 这里再挡一次（例如在另一个标签页里改过）
       if (cellGuard.isSpent(row.id, property.id)) {
         setError(cellLockHint(property.name));
         return;
       }
-      // 值没变就不发请求，也不消耗那一次机会（与服务端的判断保持一致）
+      // 值没变就不发请求（与服务端的判断保持一致）
       if (sameCellValue(row.values[property.id], value)) return;
       const release = beginWrite();
       setRows((prev) =>
@@ -188,9 +188,14 @@ export function PublicPage({ token }: PublicPageProps) {
           setRows((prev) => prev.map((item) => (item.id === result.record!.id ? result.record! : item)));
         }
         if (limitEdits) {
-          // 服务端下发的窗口截止时刻是权威值；本地也立刻记上，好让 10 秒倒计时马上开始
-          cellGuard.merge(result);
-          cellGuard.markEdited(cellKey);
+          if (isEmptyValue(value)) {
+            // 清空 = 没输入过：本地把这一格的计时窗口 / 只读状态一起撤销
+            cellGuard.clearCells(cellKey);
+          } else {
+            // 服务端下发的窗口截止时刻是权威值；本地也立刻记上，好让 10 秒倒计时马上开始
+            cellGuard.merge(result);
+            cellGuard.markEdited(cellKey);
+          }
         }
       } catch (cause) {
         setError(cause instanceof ApiError ? cause.message : '保存失败');
@@ -265,7 +270,7 @@ export function PublicPage({ token }: PublicPageProps) {
 
       {payload.database.description ? <p className="muted small share-desc">{payload.database.description}</p> : null}
       {canEdit && limitEdits ? (
-        <p className="muted small share-desc">该链接已开启「限制编辑」：每个格子只能修改一次（保存成功后 10 秒内还能改回来），之后只能查看。</p>
+        <p className="muted small share-desc">该链接已开启「限制编辑」：输入不限次数，但每次保存后 10 秒内还能继续修改，之后该格子只能查看（把内容清空则视为没有输入，不受限制）。</p>
       ) : null}
       {error ? <p className="error small share-desc">{error}</p> : null}
 

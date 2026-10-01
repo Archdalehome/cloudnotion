@@ -168,7 +168,7 @@ export const api = {
     json<{ deleted: number; total: number }>(`/api/databases/${databaseId}/records/delete`, 'POST', { recordIds }),
   /**
    * 保存一个单元格 / 一整行。受限访问者（勾了「限制编辑」的分享）的响应里还会带上
-   * 这一行的锁定状态：`cellEditGrace` 给出本次改动的格子 10 秒纠错窗口的截止时刻，
+   * 这一行的锁定状态：`cellEditGrace` 给出本次改动的格子 10 秒计时窗口的截止时刻，
    * 客户端据此显示「还能再改几秒」。
    */
   updateRecord: (id: string, body: { values?: RowValues; position?: number }) =>
@@ -247,7 +247,7 @@ export const publicApi = {
     ),
   createRecord: (token: string, values: RowValues) =>
     json<{ record: RowRecord | null }>(`/api/public/${encodeURIComponent(token)}/records`, 'POST', { values }),
-  /** 公开链接页保存单元格：响应里的 `cellEditGrace` 给出 10 秒纠错窗口的截止时刻 */
+  /** 公开链接页保存单元格：响应里的 `cellEditGrace` 给出 10 秒计时窗口的截止时刻 */
   updateRecord: (token: string, recordId: string, values: RowValues) =>
     json<{ record: RowRecord | null } & CellEditLocks>(
       `/api/public/${encodeURIComponent(token)}/records/${recordId}`,

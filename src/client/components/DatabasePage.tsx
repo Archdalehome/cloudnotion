@@ -3,7 +3,7 @@
  * view body (table / board / gallery). Owns every mutation for one database.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createId, cellLockHint, cellLockKey, defaultFilterValueForType, defaultOperatorForType, sameCellValue } from '../../shared/fields';
+import { createId, cellLockHint, cellLockKey, defaultFilterValueForType, defaultOperatorForType, isEmptyValue, sameCellValue } from '../../shared/fields';
 import type {
   CellValue,
   DatabaseChanges,
@@ -97,8 +97,9 @@ export function DatabasePage({
   const loadingMoreRef = useRef(false);
   /**
    * 单元格级「限制编辑」的判定器：只有分享时勾选了「限制编辑」的访问者才有内容 ——
-   * 每格只有一次修改机会，但第一次保存成功后的 10 秒内还能重新输入 / 修改（纠错窗口，
-   * 见 `CELL_EDIT_GRACE_MS`）；表格所有者 / 表格成员 / 未勾选「限制编辑」的分享永远是空。
+   * 输入次数不限，但每次保存成功后要等 10 秒这一格才锁上（计时窗口，见
+   * `CELL_EDIT_GRACE_MS`）；窗口内把内容清空等于没输入过。表格所有者 / 表格成员 /
+   * 未勾选「限制编辑」的分享永远是空。
    */
   const cellGuard = useCellEditLocks(database);
   /**
@@ -123,7 +124,7 @@ export function DatabasePage({
 
   /**
    * `cellGuard.reset` 的引用是稳定的（内部只 setState），但整个 guard 对象的引用会随
-   * 「10 秒纠错窗口」变化而变。整表重置的 effect 因此只依赖 `database`：否则 guard 一抖，
+   * 「10 秒计时窗口」变化而变。整表重置的 effect 因此只依赖 `database`：否则 guard 一抖，
    * 这里就会拿服务端首屏把本地已经加载进来的下一页顶掉（分页游标也跟着退回第一页）。
    */
   const resetCellGuard = cellGuard.reset;
@@ -466,7 +467,7 @@ export function DatabasePage({
         setDetail((prev) => ({ ...prev, people: { ...prev.people, ...changes.people } }));
       }
       mergeNotes(changes.notes);
-      // 别的访客用掉的格子 / 刚改过、还在 10 秒纠错窗口内的格子
+      // 别的访客锁上的格子 / 刚改过、还在 10 秒计时窗口内的格子
       cellGuard.merge(changes);
       setTotal(changes.total);
       setHasMore(loadedCountRef.current < changes.total);
@@ -578,13 +579,13 @@ export function DatabasePage({
       return;
     }
     const cellKey = cellLockKey(row.id, property.id);
-    // 勾选了「限制编辑」的分享每格只有一次机会：改过、且过了 10 秒纠错窗口的格子只读，
+    // 勾选了「限制编辑」的分享：保存过、10 秒计时窗口已过且这一格仍有内容就只读，
     // 这里再挡一次（例如在另一个标签页里刚改过同一个格子）
     if (cellGuard.isSpent(row.id, property.id)) {
       onToast(cellLockHint(property.name), 'error');
       return;
     }
-    // 值没变就不发请求，也不消耗那一次机会（与服务端的判断保持一致）
+    // 值没变就不发请求（与服务端的判断保持一致）
     if (sameCellValue(row.values[property.id], value)) return;
     // 这一轮写入在飞的时候，轮询先不要动本地数据（否则刚改的值会被顶回去）
     const release = beginWrite();
@@ -601,12 +602,18 @@ export function DatabasePage({
     try {
       const result = await api.updateRecord(row.id, { values: { [property.id]: value ?? null } });
       if (result.record) replaceRow(result.record);
-      // 只有勾选了「限制编辑」的访问者改过之后这个格子才有「一次机会」的约束：
-      // 服务端下发的窗口截止时刻是权威值，本地再记一份好让 10 秒倒计时马上开始
-      // （所有者 / 表格成员 / 未勾选的分享可以反复修改）
+      // 只有勾选了「限制编辑」的访问者才受这个约束（输入次数不限，只看时间）：
+      // - 填了内容：服务端下发的窗口截止时刻是权威值，本地再记一份好让 10 秒倒计时
+      //   立刻开始（每保存一次就重新计时）
+      // - 把内容清空：等于没输入过，这一格的计时窗口 / 只读状态一起撤销（服务端也已
+      //   删掉记账），之后还能重新输入
+      // （所有者 / 表格成员 / 未勾选的分享不受影响，可以反复修改）
       if (detail.limitCellEdits) {
-        cellGuard.merge(result);
-        cellGuard.markEdited(cellKey);
+        if (isEmptyValue(value)) cellGuard.clearCells(cellKey);
+        else {
+          cellGuard.merge(result);
+          cellGuard.markEdited(cellKey);
+        }
       }
     } catch (cause) {
       fail(cause, '保存失败');
@@ -655,8 +662,8 @@ export function DatabasePage({
 
   const uploadFile = async (row: RowRecord, property: Property, file: File): Promise<FileValue> => {
     if (property.locked) throw new Error(`字段「${property.name}」已锁定，无法上传文件`);
-    // 文件字段属于这个格子的值：勾选了「限制编辑」时改过、且过了 10 秒纠错窗口之后
-    // 也不允许再上传（服务端同样会拒绝）
+    // 文件字段属于这个格子的值：勾选了「限制编辑」时保存过、10 秒计时窗口已过、
+    // 这一格仍有内容的话也不允许再上传（服务端同样会拒绝）
     if (cellGuard.isSpent(row.id, property.id)) {
       throw new Error(cellLockHint(property.name));
     }

@@ -61,6 +61,10 @@ export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
             onChange={(event) => setEmail(event.target.value)}
             placeholder="you@example.com"
             autoComplete="email"
+            // 手机键盘默认会首字母大写 / 自动更正，邮箱与密码都不需要
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             required
           />
         </label>
@@ -74,6 +78,9 @@ export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
             onChange={(event) => setPassword(event.target.value)}
             placeholder="至少 8 位"
             autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             minLength={8}
             required
           />

@@ -240,12 +240,12 @@ export function hasDefaultStatus(property: Pick<Property, 'type'>): boolean {
 }
 
 /**
- * 单元格级「限制编辑」的纠错窗口（毫秒）：共享出来的可编辑访问者对每一格只有
- * 一次修改机会，但第一次保存成功后的这段时间内还允许重新输入 / 修改 ——
- * 给人一个「刚填完就发现写错了」的改正机会。
+ * 单元格级「限制编辑」的计时窗口（毫秒）：共享出来的可编辑访问者对每一格的输入
+ * **次数不限**，但每次保存成功后都要等这段时间才会「锁上」：
  *
- * 窗口从**第一次保存成功**的时刻起算，不因为窗口内的再次修改而延长：
- * 10 秒一到这一格就彻底只读，只能请表格所有者代改。
+ * - 窗口内（从**最近一次保存成功**起算）想改多少遍都行；
+ * - 窗口一到，只要这一格还有内容就只读，只能请表格所有者代改；
+ * - 窗口内把内容清空 = 没输入过：计时取消，这一格不受限制。
  *
  * Worker 用它判断某格是否已经锁上（`worker/cellEdits.ts`），客户端用它做本地
  * 倒计时（`client/lib/cellEditLocks.ts`），两边必须保持一致。
@@ -255,28 +255,28 @@ export const CELL_EDIT_GRACE_MS = 10_000;
 /**
  * 单元格级锁定的键：`记录 id:字段 id`。
  * Worker 用同样的拼法生成 `lockedCells` / `cellEditGrace`，
- * 客户端据此判断某个格子是否已经改过、还能不能改。
+ * 客户端据此判断某个格子是否已经锁上、还能不能改。
  */
 export function cellLockKey(recordId: string, propertyId: string): string {
   return `${recordId}:${propertyId}`;
 }
 
-/** 「每个格子只能改一次」的提示文案（Worker 与客户端共用同一句）。 */
+/** 「限制编辑」锁上之后的提示文案（Worker 与客户端共用同一句）。 */
 export function cellLockHint(name?: string): string {
   return name
-    ? `「${name}」这条记录你已经改过一次了，如需再次修改请联系表格所有者`
-    : '这个格子你已经改过一次了，如需再次修改请联系表格所有者';
+    ? `「${name}」已经填过内容了，如需再次修改请联系表格所有者`
+    : '这个格子已经填过内容了，如需再次修改请联系表格所有者';
 }
 
 /**
- * 纠错窗口内的提示文案：告诉访问者这一格刚刚保存过，但窗口还没关、还能再改
+ * 计时窗口内的提示文案：告诉访问者这一格刚刚保存过，但窗口还没关、还能继续改
  * （`msLeft` 是窗口剩余毫秒）。窗口一过就换成 {@link cellLockHint}。
  */
 export function cellGraceHint(name: string | undefined, msLeft: number): string {
   const seconds = Math.max(1, Math.ceil(msLeft / 1000));
   return name
-    ? `「${name}」刚刚保存过，${seconds} 秒内还可以再修改`
-    : `这个格子刚刚保存过，${seconds} 秒内还可以再修改`;
+    ? `「${name}」刚刚保存过，${seconds} 秒内还可以继续修改`
+    : `这个格子刚刚保存过，${seconds} 秒内还可以继续修改`;
 }
 
 function canonicalValue(value: unknown): string {
@@ -292,7 +292,7 @@ function canonicalValue(value: unknown): string {
 
 /**
  * 深度比较两个单元格的值（忽略对象键顺序与 `undefined`）。
- * 用来判断一次保存请求是否真的改了值 —— 值没变不该消耗「每个格子只能改一次」的机会。
+ * 用来判断一次保存请求是否真的改了值 —— 值没变不该开始 / 刷新 10 秒计时窗口。
  */
 export function sameCellValue(left: unknown, right: unknown): boolean {
   return canonicalValue(left) === canonicalValue(right);

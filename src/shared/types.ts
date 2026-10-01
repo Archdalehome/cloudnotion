@@ -208,7 +208,8 @@ export interface Share {
   token: string;
   permission: 'view' | 'edit';
   /**
-   * 创建链接时勾选的「限制编辑」：可编辑链接的访客对每个格子只有一次修改机会。
+   * 创建链接时勾选的「限制编辑」：可编辑链接的访客输入不限次数，
+   * 但每次保存后要等 10 秒这一格才会锁上（清空则视为没输入过）。
    * 只读链接恒为 false（本来就不能改）。
    */
   limitEdits: boolean;
@@ -227,7 +228,8 @@ export interface ViewShare {
   name: string;
   role: Role;
   /**
-   * 分享时勾选的「限制编辑」：被分享者（role = 'editor'）对每个格子只有一次修改机会。
+   * 分享时勾选的「限制编辑」：被分享者（role = 'editor'）输入不限次数，
+   * 但每次保存后要等 10 秒这一格才会锁上（清空则视为没输入过）。
    * 可查看的分享恒为 false（本来就不能改）。
    */
   limitEdits: boolean;
@@ -286,20 +288,21 @@ export interface InboxResponse {
 /* --------------------------------------------------------------- cell lock */
 
 /**
- * 单元格级「限制编辑」的当前状态：彻底只读的格子 + 还在纠错窗口内的格子。
+ * 单元格级「限制编辑」的当前状态：只读的格子 + 还在计时窗口内的格子。
  *
  * 只有勾选了「限制编辑」的访问者（公开分享链接 / 视图定向分享）才有内容：
- * - 某格第一次保存成功后进入 10 秒纠错窗口（`CELL_EDIT_GRACE_MS`），窗口内还能
- *   重新输入或修改；
- * - 窗口一过这一格就彻底只读（列进 `lockedCells`），只能请表格所有者代改。
+ * - 每次保存成功都会开始 / 刷新 10 秒计时窗口（`CELL_EDIT_GRACE_MS`），窗口内想改
+ *   多少遍都行；
+ * - 窗口一过，只要这一格还有内容就只读（列进 `lockedCells`），只能请表格所有者代改；
+ * - 窗口内把内容清空 = 没输入过：这两个列表里都不会出现这一格。
  *
  * 表格所有者、表格成员、以及没勾选「限制编辑」的分享拿到的永远是空的。
  */
 export interface CellEditLocks {
-  /** 已经改过、且过了纠错窗口（彻底只读）的格子：键为 `记录 id:字段 id` */
+  /** 保存过、计时窗口已过、且现在仍有内容的格子（只读）：键为 `记录 id:字段 id` */
   lockedCells: string[];
   /**
-   * 还在纠错窗口内的格子：键为 `记录 id:字段 id`，值为窗口截止时刻（epoch ms）。
+   * 还在 10 秒计时窗口内的格子：键为 `记录 id:字段 id`，值为窗口截止时刻（epoch ms）。
    * 客户端据此倒计时（窗口一到该格自动变只读）；服务端始终是权威判断。
    */
   cellEditGrace: Record<string, number>;
@@ -364,7 +367,7 @@ export interface DatabaseDetail extends CellEditLocks {
    * 备注只能新增，不能修改 / 删除（服务端没有对应的接口）。
    */
   notes: RecordNote[];
-  /** 当前访问者是否受「限制编辑」约束（每个格子只能改一次） */
+  /** 当前访问者是否受「限制编辑」约束（输入不限次数，保存后 10 秒这一格才锁上） */
   limitCellEdits: boolean;
   /**
    * 记录元数据（创建人 / 最后编辑人）里出现过的用户 id → 显示名。
@@ -434,7 +437,7 @@ export interface PublicDatabaseResponse extends CellEditLocks {
     icon: string;
     description: string;
     permission: 'view' | 'edit';
-    /** 创建链接时勾选的「限制编辑」：每个格子只能改一次 */
+    /** 创建链接时勾选的「限制编辑」：输入不限次数，保存后 10 秒这一格才锁上 */
     limitEdits: boolean;
     /** 表格所有者（公开链接里「当前用户」筛选解析为这个人） */
     ownerId: string;
