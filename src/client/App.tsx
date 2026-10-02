@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DatabaseDetail, DatabaseSummary, InboxMessage, InboxResponse, SessionUser } from '../shared/types';
-import { ApiError, api, type SessionPayload } from './api';
+import { ApiError, api, setSessionToken, type SessionPayload } from './api';
 import { AdminPanel } from './components/AdminPanel';
 import { AuthPage } from './components/AuthPage';
 import { ChangePasswordDialog } from './components/ChangePasswordDialog';
@@ -24,6 +24,18 @@ interface ToastItem {
 /** 私信（@提醒）的轮询间隔：改备注的人不少，60 秒足够及时又不费流量 */
 const INBOX_POLL_MS = 60_000;
 const EMPTY_INBOX: InboxResponse = { messages: [], unread: 0 };
+
+/**
+ * 会话探测的重试次数与间隔。
+ *
+ * 手机上丢一次请求太常见了（切前后台、地铁里信号跳一下、运营商偶发超时）。以前任何一次
+ * 失败都会被当成「没登录」直接打回登录页，所以这里多试几次，只有服务端明确回答「没登录」
+ * （200 且 user 为空，或 401）才真的退出登录。
+ */
+const SESSION_ATTEMPTS = 3;
+const SESSION_RETRY_MS = 400;
+
+const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 /** 点开私信后要打开的位置：某张表格的某条记录里的某条备注 */
 interface InboxTarget {
@@ -110,6 +122,8 @@ export function App() {
   const [changingPassword, setChangingPassword] = useState(false);
   /** 邀请页已经处理完（注册成功 / 点了「去登录」）：回到正常的登录或工作区 */
   const [inviteDone, setInviteDone] = useState(false);
+  /** 会话拉取失败的原因（网络 / 服务端问题）。有值时未登录界面显示「重试」而不是直接判为未登录 */
+  const [sessionError, setSessionError] = useState('');
 
   const toast = useCallback((message: string, kind: 'info' | 'error' = 'info') => {
     const id = Date.now() + Math.random();
@@ -153,23 +167,66 @@ export function App() {
   /**
    * 拉取会话（用户 + 表格列表）并自动打开第一张表格。
    * 登录成功后同样会走这里：手机上不必再手动展开侧边栏才有内容。
+   *
+   * 只有服务端**明确**回答「没登录」才把人退回登录页；断网 / 超时 / 5xx 会重试几次，
+   * 仍然失败就保留现状并给出重试入口 —— 手机上一次网络抖动就把人从工作区踢回登录页，
+   * 正是之前「登录后闪退」的来源。
    */
   const bootstrapSession = useCallback(async (): Promise<SessionPayload | null> => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < SESSION_ATTEMPTS; attempt += 1) {
+      try {
+        const payload = await api.session();
+        setAppName(payload.appName);
+        setUser(payload.user);
+        setDatabases(payload.databases);
+        if (payload.user && payload.databases.length) {
+          setActiveId((prev) =>
+            prev && payload.databases.some((item) => item.id === prev) ? prev : payload.databases[0].id,
+          );
+        }
+        // 服务端明确说没登录：本地那份兜底令牌也已经没用了
+        if (!payload.user) setSessionToken(null);
+        setSessionError('');
+        return payload;
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          setSessionToken(null);
+          setUser(null);
+          setDatabases([]);
+          setSessionError('');
+          return null;
+        }
+        lastError = cause;
+        if (attempt < SESSION_ATTEMPTS - 1) await delay(SESSION_RETRY_MS * (attempt + 1));
+      }
+    }
+    // 连不上服务器：保留当前界面（可能已经在工作区里），只记下原因并在未登录时提供重试
+    setSessionError(lastError instanceof ApiError ? lastError.message : '网络连接失败');
+    return null;
+  }, []);
+
+  /** 会话拉取失败后点「重试」：回到载入态再拉一次 */
+  const retrySession = useCallback(() => {
+    setBooting(true);
+    void bootstrapSession().finally(() => setBooting(false));
+  }, [bootstrapSession]);
+
+  /**
+   * 单次 401 不足以下结论（手机网络 / 代理偶发），跟服务端复核一次：
+   * 返回 true 才是真的掉线了（此时 `/api/session` 明确回答没登录）。
+   */
+  const confirmSignedOut = useCallback(async (): Promise<boolean> => {
     try {
       const payload = await api.session();
-      setAppName(payload.appName);
-      setUser(payload.user);
-      setDatabases(payload.databases);
-      if (payload.user && payload.databases.length) {
-        setActiveId((prev) =>
-          prev && payload.databases.some((item) => item.id === prev) ? prev : payload.databases[0].id,
-        );
-      }
-      return payload;
-    } catch {
+      if (payload.user) return false;
+      setSessionToken(null);
       setUser(null);
       setDatabases([]);
-      return null;
+      return true;
+    } catch {
+      // 连问都问不到：更像网络问题，保留当前界面不要把人踢出去
+      return false;
     }
   }, []);
 
@@ -200,31 +257,33 @@ export function App() {
     let cancelled = false;
     setDetailLoading(true);
     setDetailError('');
-    api
-      .getDatabase(activeId, { limit: 100 })
-      .then((next) => {
+    void (async () => {
+      try {
+        const next = await api.getDatabase(activeId, { limit: 100 });
         if (!cancelled) setDetail(next);
-      })
-      .catch((cause) => {
+      } catch (cause) {
         if (cancelled) return;
         setDetail(null);
-        const expired = cause instanceof ApiError && cause.status === 401;
-        const message = expired
-          ? '登录状态已失效，请重新登录'
-          : cause instanceof ApiError
-            ? cause.message
-            : '加载表格失败，请检查网络后重试';
+        if (cause instanceof ApiError && cause.status === 401) {
+          // 一次 401 说明不了什么（手机网络 / 代理偶发），先跟服务端复核再决定要不要退出登录
+          const signedOut = await confirmSignedOut();
+          if (cancelled) return;
+          const message = signedOut ? '登录状态已失效，请重新登录' : '暂时连不上服务器，请稍后重试';
+          setDetailError(message);
+          toast(message, 'error');
+          return;
+        }
+        const message = cause instanceof ApiError ? cause.message : '加载表格失败，请检查网络后重试';
         setDetailError(message);
-        if (expired) setUser(null);
         toast(message, 'error');
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setDetailLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [activeId, toast, detailReloadKey]);
+  }, [activeId, toast, detailReloadKey, confirmSignedOut]);
 
   /* ------------------------------------------------------------- 收件箱 */
 
@@ -326,7 +385,7 @@ export function App() {
       setDetailReloadKey((value) => value + 1);
       void bootstrapSession().then((payload) => {
         if (!payload?.user) {
-          toast('登录状态未能保存：请检查浏览器是否允许使用 Cookie（无痕模式或「阻止所有 Cookie」会导致无法登录）', 'error');
+          toast('已登录，但这次没能同步会话：网络似乎不稳定，刷新页面或点「重试」即可', 'error');
         }
       });
     },
@@ -358,7 +417,28 @@ export function App() {
     );
   }
 
-  if (!user) return <AuthPage appName={appName} onAuthenticated={reauthenticate} />;
+  if (!user) {
+    // 会话没拉上（断网 / 服务端出错）：给一个明确的重试入口，而不是让人以为「没登录」
+    if (sessionError) {
+      return (
+        <div className="centered">
+          <div className="empty-state">
+            <h2>连不上服务器</h2>
+            <p className="error">{sessionError}</p>
+            <p className="small muted">
+              手机网络不稳定时很常见：点「重试」重新连接，登录状态不会因此丢失。
+            </p>
+            <div className="empty-actions">
+              <button type="button" className="btn primary" onClick={retrySession}>
+                重试
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return <AuthPage appName={appName} onAuthenticated={reauthenticate} />;
+  }
 
   return (
     <div className={`app-shell${sidebarOpen ? '' : ' sidebar-collapsed'}${narrow ? ' narrow' : ''}`}>

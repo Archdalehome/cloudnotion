@@ -414,6 +414,17 @@ export interface SessionUser {
 }
 
 /**
+ * 会话令牌。默认只通过 HttpOnly cookie 下发；只有客户端在登录请求里带
+ * `tokenInBody: true` 时才会出现在响应体里 —— 手机浏览器（无痕模式、被拦截的
+ * Cookie、部分 App 内嵌浏览器）会把 `Set-Cookie` 丢掉，这时客户端把令牌存在本地
+ * 并由 `Authorization: Bearer` 头带上，服务端两种都认。
+ */
+export interface SessionToken {
+  token: string;
+  expiresAt: number;
+}
+
+/**
  * 注册第一步（`POST /api/auth/register`）的响应：账号还没建好，等用户填确认码。
  * `devCode` 只在「邮件服务未配置」或「收件人是保留测试域」时出现，方便本地开发 / 自动化测试。
  */
@@ -506,6 +517,20 @@ export interface InviteAcceptResponse {
   user: SessionUser;
   databaseId: string;
   viewId: string;
+  /** 见 `SessionToken`：只有客户端带 `tokenInBody: true` 时才会带上 */
+  session?: SessionToken;
+}
+
+/** 登录 / 注册确认的响应（`session` 同样只在要求 `tokenInBody` 时出现）。 */
+export interface LoginResponse {
+  user: SessionUser;
+  session?: SessionToken;
+}
+
+export interface VerifyRegistrationResponse {
+  user: SessionUser;
+  emailVerified: true;
+  session?: SessionToken;
 }
 
 /** 管理员批量删除用户的结果（`POST /api/admin/users/delete`）。 */

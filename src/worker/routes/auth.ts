@@ -5,7 +5,11 @@
  *   1. `POST /api/auth/register`        → 202 `{ pending: true, ... }`，只登记待确认的注册并发出 6 位确认码
  *   2. `POST /api/auth/register/verify` → 201 `{ user }`，校验确认码后才真正建账号并自动登录
  *   没收到邮件时可以 `POST /api/auth/register/resend` 重发（同一邮箱 60 秒一次）。
+ *
+ * 会话默认只走 HttpOnly cookie；带 `tokenInBody: true` 时令牌会额外出现在响应体里，
+ * 供「Cookie 存不下来」的手机浏览器用 `Authorization: Bearer` 兜底（见 `wantsTokenInBody`）。
  */
+import type { LoginResponse, VerifyRegistrationResponse } from '../../shared/types';
 import {
   assertSignupAllowed,
   clearedSessionCookie,
@@ -17,9 +21,11 @@ import {
   isSecureRequest,
   requireUser,
   sessionCookie,
+  sessionTokenFrom,
+  sessionTokenPayload,
   validatePasswordStrength,
   verifyPassword,
-  SESSION_COOKIE,
+  wantsTokenInBody,
 } from '../auth';
 import { ensureAdminUser } from '../admin';
 import { emailFailure, sendEmail, shouldEchoCode, verificationCodeEmail } from '../email';
@@ -28,7 +34,6 @@ import {
   asString,
   badRequest,
   conflict,
-  getCookie,
   json,
   newId,
   normalizeEmail,
@@ -129,11 +134,16 @@ async function verifyRegistrationHandler(ctx: RequestContext): Promise<Response>
 
   // 新账号不再自动生成「我的第一个表格」（也不写任何示例数据）：
   // 注册完成后从空白开始，需要时用户在侧边栏自己新建表格。
-  const { token } = await createSession(env, userId);
-  return json(
-    { user: { id: userId, email, name, isAdmin: false }, emailVerified: true },
-    { status: 201, headers: { 'set-cookie': sessionCookie(token, isSecureRequest(ctx.request)) } },
-  );
+  const session = await createSession(env, userId);
+  const payload: VerifyRegistrationResponse = {
+    user: { id: userId, email, name, isAdmin: false },
+    emailVerified: true,
+  };
+  if (wantsTokenInBody(body)) payload.session = sessionTokenPayload(session);
+  return json(payload, {
+    status: 201,
+    headers: { 'set-cookie': sessionCookie(session.token, isSecureRequest(ctx.request)) },
+  });
 }
 
 async function resendRegistrationHandler(ctx: RequestContext): Promise<Response> {
@@ -162,22 +172,23 @@ async function loginHandler(ctx: RequestContext): Promise<Response> {
   if (!ok) throw unauthorized('邮箱或密码不正确');
 
   const userId = sqlString(row, 'id');
-  const { token } = await createSession(env, userId);
-  return json(
-    {
-      user: {
-        id: userId,
-        email: sqlString(row, 'email'),
-        name: sqlString(row, 'name'),
-        isAdmin: sqlNumber(row, 'is_admin') === 1,
-      },
+  const session = await createSession(env, userId);
+  const payload: LoginResponse = {
+    user: {
+      id: userId,
+      email: sqlString(row, 'email'),
+      name: sqlString(row, 'name'),
+      isAdmin: sqlNumber(row, 'is_admin') === 1,
     },
-    { headers: { 'set-cookie': sessionCookie(token, isSecureRequest(ctx.request)) } },
-  );
+  };
+  if (wantsTokenInBody(body)) payload.session = sessionTokenPayload(session);
+  return json(payload, {
+    headers: { 'set-cookie': sessionCookie(session.token, isSecureRequest(ctx.request)) },
+  });
 }
 
 async function logoutHandler(ctx: RequestContext): Promise<Response> {
-  const token = getCookie(ctx.request, SESSION_COOKIE);
+  const token = sessionTokenFrom(ctx.request);
   if (token) await destroySession(ctx.env, token);
   return json({ ok: true }, { headers: { 'set-cookie': clearedSessionCookie(isSecureRequest(ctx.request)) } });
 }

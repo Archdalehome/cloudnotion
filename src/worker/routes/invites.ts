@@ -9,7 +9,7 @@
  * 不接受客户端指定，避免把邀请用成「任意邮箱注册」的后门。
  */
 import type { InviteAcceptResponse, InviteDetail } from '../../shared/types';
-import { assertSignupAllowed, createSession, hashPassword, isSecureRequest, sessionCookie, validatePasswordStrength } from '../auth';
+import { assertSignupAllowed, createSession, hashPassword, isSecureRequest, sessionCookie, sessionTokenPayload, validatePasswordStrength, wantsTokenInBody } from '../auth';
 import { consumeInvite, inviteContext, loadInviteByToken, type ViewInviteRecord } from '../invites';
 import {
   HttpError,
@@ -113,15 +113,16 @@ async function acceptInviteHandler(ctx: RequestContext): Promise<Response> {
   await consumeInvite(env, invite.id);
 
   // 新账号不再自动建「我的第一个表格」：邀请进来的用户直接看被分享的视图
-  const { token } = await createSession(env, userId);
+  const session = await createSession(env, userId);
   const payload: InviteAcceptResponse = {
     user: { id: userId, email, name, isAdmin: false },
     databaseId: invite.databaseId,
     viewId: invite.viewId,
   };
+  if (wantsTokenInBody(body)) payload.session = sessionTokenPayload(session);
   return json(payload, {
     status: 201,
-    headers: { 'set-cookie': sessionCookie(token, isSecureRequest(ctx.request)) },
+    headers: { 'set-cookie': sessionCookie(session.token, isSecureRequest(ctx.request)) },
   });
 }
 

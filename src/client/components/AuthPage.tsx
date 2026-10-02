@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RegistrationPending, SessionUser } from '../../shared/types';
 import { ApiError, api } from '../api';
+import { confirmSessionLanded } from '../lib/session';
 
 interface AuthPageProps {
   appName: string;
@@ -42,7 +43,14 @@ export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
     setNotice('');
     try {
       if (mode === 'login') {
-        const result = await api.login({ email: email.trim(), password });
+        const credentials = { email: email.trim(), password };
+        const result = await api.login(credentials);
+        // 登录接口 200 不代表会话真的存下来了（无痕 / 拦截 Cookie 的浏览器会丢掉 Set-Cookie）
+        const landing = await confirmSessionLanded(credentials);
+        if (!landing.ok) {
+          setError(landing.message ?? '登录状态没能保存，请重试一次');
+          return;
+        }
         onAuthenticated(result.user);
         return;
       }
@@ -69,7 +77,14 @@ export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
     setBusy(true);
     setError('');
     try {
-      const result = await api.verifyRegistration({ email: email.trim(), code: code.trim() });
+      const credentials = { email: email.trim(), password };
+      const result = await api.verifyRegistration({ email: credentials.email, code: code.trim() });
+      // 确认码已经被这次验证消费掉了，所以兜底只能走刚设置的密码重新登录
+      const landing = await confirmSessionLanded(credentials);
+      if (!landing.ok) {
+        setError(`${landing.message ?? '注册完成，但登录状态没能保存'}（账号已创建，可以直接用这个邮箱登录）`);
+        return;
+      }
       onAuthenticated(result.user);
     } catch (cause) {
       setError(describe(cause, '确认失败，请稍后再试'));

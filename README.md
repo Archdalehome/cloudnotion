@@ -16,7 +16,7 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希）；**注册分两步**：先发 6 位邮箱确认码（`POST /api/auth/register` 返回 202 + `codeTtl`），验证码通过才写入 `users`，所以**没确认过的邮箱不会占号**；登录后在侧边栏底部「改密码」凭当前密码自行修改（作废其他设备的会话、当前设备保留）；用户名 / 邮箱 / 退出平时在侧边栏底部，侧边栏收起（手机端抽屉关闭）时挪到右上角顶部条；**新账号从空白开始**：不再自动生成「我的第一个表格」或任何示例数据，需要时自己在侧边栏新建表格 |
+| 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希）；**注册分两步**：先发 6 位邮箱确认码（`POST /api/auth/register` 返回 202 + `codeTtl`），验证码通过才写入 `users`，所以**没确认过的邮箱不会占号**；登录后在侧边栏底部「改密码」凭当前密码自行修改（作废其他设备的会话、当前设备保留）；用户名 / 邮箱 / 退出平时在侧边栏底部，侧边栏收起（手机端抽屉关闭）时挪到右上角顶部条；**新账号从空白开始**：不再自动生成「我的第一个表格」或任何示例数据，需要时自己在侧边栏新建表格；**Cookie 存不下来的浏览器也能正常登录**：无痕模式、被拦截的 Cookie、部分 App 内嵌浏览器会把 `Set-Cookie` 丢掉（表现就是「登录成功后又被退回登录页」），所以客户端在登录 / 邀请注册成功后会先问一次 `/api/session` 确认会话真的落地 —— 没落地就用同一个密码带 `tokenInBody` 再登一次，把令牌存在本地并用 `Authorization: Bearer` 继续访问（服务端 cookie 优先、令牌兜底） |
 | 用户管理 | 仅供 `ADMIN_EMAIL` 指定的超级管理员（首次登录自动创建 / 提升，见 [DEPLOY.md 6.6](./DEPLOY.md)）：侧边栏底部的「用户管理」面板支持按邮箱 / 昵称搜索 + 分页，显示建表数 / 协作者数 / 最近活跃时间，可改昵称与邮箱，也可一键重置密码（新密码邮件通知本人并作废其全部会话；重置自己时连当前会话一起失效，需重新登录）；**第一列是复选框**，勾选后可「删除选中」批量删除账号（连同他拥有的表格、记录、备注、上传文件一起清理；自己与其它管理员会被跳过并提示原因） |
 | 表格 | 多表格（Database）管理、图标/描述、**新建即空白表格**（只有「名称」字段，弹窗里不再让用户挑模板）、软删除归档 |
 | 字段 | 16 种字段类型（文本/数字/单选/多选/状态/日期/勾选/链接/邮箱/电话/附件/创建时间/更新时间/创建人/更新人），可重命名、改宽、拖动排序、类型转换时清洗数据；表头 `▾` 菜单支持「编辑 / 升序 / 降序 / 添加筛选 / 在右侧插入 / ← → 左右移动该列 / 隐藏字段 / 锁定字段 / 删除字段」；**升序 / 降序是单键排序**：视图里只保留一条排序规则，对某个字段升 / 降序会自动取消其他字段的排序，当前排序字段在表头显示 ↑ / ↓；表格末尾不再显示「＋ 字段」列，新增字段统一走表头 `▾` 菜单的「＋ 在右侧插入」 |
@@ -48,7 +48,7 @@ src/
     routes/    auth / invites / admin / databases / properties / records / views / public / files / notes
   client/     React SPA
     App.tsx            会话 + 表格列表 + `/share/:token`、`/invite/:token` 路由
-    api.ts             fetch 封装（cookie、ApiError、typed 响应）
+    api.ts             fetch 封装（cookie + `Authorization: Bearer` 兜底、ApiError、typed 响应）
     components/        AuthPage Sidebar DatabasePage PublicPage TableGrid CardViews
                        Cell RecordDialog PropertyDialog ViewBar SharePanel Modal Popover
                        InboxButton UserChip FilterPanel ChangePasswordDialog
@@ -56,9 +56,13 @@ src/
     lib/viewEngine.ts  前端筛选/排序/分组计算
     lib/time.ts        相对时间 / 精确时间的格式化
     lib/cellEditLocks.ts  单元格「限制编辑」的 10 秒计时窗口（判定 / 倒计时 / 到点自动只读）
+    lib/session.ts     登录后的「会话落地」确认：Cookie 存不下来时回退到本地令牌 + Bearer
 scripts/
   check-routes.mjs  路由静态检查（重复/处理器缺失/公开端点）
   smoke-test.mjs    端到端冒烟测试（失败时退出码 1）
+tools/
+  mobile-check/nocookie-login.mjs  本地诊断：用「丢掉 Set-Cookie」的反向代理模拟手机浏览器，验证登录后不会被打回登录页
+  online-smoke-proxy.mjs           国内网络下让 Node 的 fetch 走系统代理，跑线上冒烟测试
 migrations/
   0001_init.sql     D1 初始化迁移
   ...               0002-0005：视图定向分享 / 字段锁定 / 分享限制编辑等增量迁移
@@ -96,7 +100,7 @@ node scripts/smoke-test.mjs
 BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 ```
 
-冒烟测试覆盖：健康检查 → **两步注册**（确认码 TTL / 测试域回显 / 60 秒重发节流 / 错误码 / 已用码不能重放 / 未确认邮箱不能登录）/ 会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删（含表级锁定参数被忽略的回归断言）→ 分享链接（只读拒写、可编辑可写、**限制编辑的 10 秒计时窗口**：窗口内同一格可以反复改（不限次数）、窗口内清空即视为没输入过（之后可重新输入）、窗口一过即拒写并列入 `lockedCells`）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读、所有者 ↔ 定向分享访客互相 @、单条记录同步接口）→ **多人协作增量同步**（版本号游标、新行/改单元格/新备注/删行各自进增量、空增量、结构改动返回 reset）→ R2 上传下载 → **改密码**（当前密码必须正确、新旧不得相同、强度校验、其他设备被下线、当前设备保留、旧密码失效）→ **用户管理**（匿名 401 / 非管理员 403、按邮箱搜索、计数器与最近活跃、改昵称与邮箱、邮箱冲突 409、未知用户 404、重置他人密码 + 对方会话作废 + 临时密码可登录、重置自己后当前会话失效）→ 清理。共 **199 项断言**。
+冒烟测试覆盖：健康检查 → **两步注册**（确认码 TTL / 测试域回显 / 60 秒重发节流 / 错误码 / 已用码不能重放 / 未确认邮箱不能登录）/ 会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删（含表级锁定参数被忽略的回归断言）→ 分享链接（只读拒写、可编辑可写、**限制编辑的 10 秒计时窗口**：窗口内同一格可以反复改（不限次数）、窗口内清空即视为没输入过（之后可重新输入）、窗口一过即拒写并列入 `lockedCells`）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读、所有者 ↔ 定向分享访客互相 @、单条记录同步接口）→ **多人协作增量同步**（版本号游标、新行/改单元格/新备注/删行各自进增量、空增量、结构改动返回 reset）→ R2 上传下载 → **改密码**（当前密码必须正确、新旧不得相同、强度校验、其他设备被下线、当前设备保留、旧密码失效）→ **用户管理**（匿名 401 / 非管理员 403、按邮箱搜索、计数器与最近活跃、改昵称与邮箱、邮箱冲突 409、未知用户 404、重置他人密码 + 对方会话作废 + 临时密码可登录、重置自己后当前会话失效）→ **会话兜底（拿不到 Cookie 的手机浏览器）**（不下发令牌时不带 `session` / 登录响应里不该出现令牌、响应照旧带 `Set-Cookie`、`tokenInBody: true` 才给令牌、光靠 `Authorization: Bearer` 就能认证 `/api/session`、伪造令牌视为未登录、带令牌登出后令牌立即作废）→ 清理。共 **227 项断言**（本地 / CI 的 e2e 用 `admin@example.com` 测试管理员，跑满 227；线上用真实 `ADMIN_EMAIL` 时自动跳过 2 项「重置自己密码」断言，跑 **225/225**）。
 
 ## 数据模型
 
@@ -127,11 +131,11 @@ BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 
 ```
 POST   /api/auth/register                 （发 6 位邮箱确认码 → 202 + codeTtl）
-POST   /api/auth/register/verify          （校验确认码 → 建号并登录）
+POST   /api/auth/register/verify          （校验确认码 → 建号并登录；带 tokenInBody: true 时响应里多一个 session）
 POST   /api/auth/register/resend          （重发确认码，60 秒节流）
-POST   /api/auth/login | /api/auth/logout
+POST   /api/auth/login | /api/auth/logout （login 带 tokenInBody: true 时响应里多一个 session: { token, expiresAt }）
 POST   /api/auth/password                 （登录后改密码：其他设备下线、当前设备保留）
-GET    /api/session
+GET    /api/session                       （需要登录的接口都同时认 cn_session cookie 与 Authorization: Bearer 头）
 GET    /api/databases              POST /api/databases
 GET|PATCH|DELETE /api/databases/:id
 GET    /api/databases/:id/changes          （多人协作增量：自 ?since=<rev> 起的改动）
@@ -157,7 +161,7 @@ GET    /api/public/:token/changes          （公开链接页的增量同步，�
 POST   /api/public/:token/records
 PATCH|DELETE /api/public/:token/records/:recordId
 GET    /api/invites/:token                 （受邀人打开邀请链接：表格 / 视图 / 邀请人）
-POST   /api/invites/:token/accept          （填昵称 + 密码完成注册，自动获得该视图分享）
+POST   /api/invites/:token/accept          （填昵称 + 密码完成注册，自动获得该视图分享；同样支持 tokenInBody）
 POST   /api/databases/:id/view-shares      （邮箱未注册时 404 email_not_registered；带 invite: true 改为发邀请链接）
 DELETE /api/view-shares/:id
 GET    /api/admin/users                    （超级管理员：用户列表 ?search=&limit=&offset=）
@@ -177,8 +181,8 @@ GET    /api/health
 
 ```
 verify   npm ci -> npm run typecheck -> npm run check:routes -> vite build
-e2e      本地 D1 迁移 -> 写临时 .dev.vars（测试管理员 + 回显白名单）-> wrangler dev --local -> scripts/smoke-test.mjs（199 项断言）
-deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 同步可选 Secrets（邮件 / 管理员）-> 线上冒烟测试（本地那套 199 项断言；线上用真实 ADMIN_EMAIL 时自动跳过 2 项「改密码」断言）
+e2e      本地 D1 迁移 -> 写临时 .dev.vars（测试管理员 + 回显白名单）-> wrangler dev --local -> scripts/smoke-test.mjs（227 项断言）
+deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 同步可选 Secrets（邮件 / 管理员）-> 线上冒烟测试（本地那套 227 项断言；线上用真实 ADMIN_EMAIL 时自动跳过 2 项「重置自己密码」断言 → 225/225）
 ```
 
 只需在仓库 `Settings → Secrets and variables → Actions` 配置：

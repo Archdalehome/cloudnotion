@@ -13,6 +13,7 @@ import {
   unauthorized,
   type SqlRow,
 } from './http';
+import type { SessionToken } from '../shared/types';
 import type { AuthedUser, Env } from './types';
 
 export const SESSION_COOKIE = 'cn_session';
@@ -112,8 +113,40 @@ export async function destroySession(env: Env, token: string): Promise<void> {
   await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
 }
 
+/**
+ * 这次请求携带的会话令牌：优先 HttpOnly cookie，其次 `Authorization: Bearer <token>`。
+ *
+ * 手机浏览器（无痕模式、「阻止所有 Cookie」、部分 App 内嵌浏览器）会把 `Set-Cookie`
+ * 丢掉，表现为「登录接口返回 200，但下一个请求就变成未登录」——页面会闪一下又回到
+ * 登录页。这种环境里客户端会把登录响应里的令牌存在本地，并用 `Authorization` 头带上，
+ * 所以服务端两种来源都要认（cookie 优先，保持原有行为不变）。
+ */
+export function sessionTokenFrom(request: Request): string | null {
+  const cookie = getCookie(request, SESSION_COOKIE);
+  if (cookie) return cookie;
+  const header = request.headers.get('authorization') ?? '';
+  const match = /^Bearer\s+(\S+)$/i.exec(header.trim());
+  return match ? match[1] : null;
+}
+
+/**
+ * 这个请求要不要把会话令牌放进响应体。
+ *
+ * 默认会话只走 HttpOnly cookie；上面那些会把 `Set-Cookie` 丢掉的环境里，前端会带
+ * `tokenInBody: true` 再登一次，把令牌存在本地并由 `Authorization` 头带上。
+ * 令牌按需下发，正常浏览器拿不到，安全性不受影响。
+ */
+export function wantsTokenInBody(body: Record<string, unknown>): boolean {
+  return body.tokenInBody === true;
+}
+
+/** 会话令牌的响应体形态（只在客户端要求时下发）。 */
+export function sessionTokenPayload(session: { token: string; expiresAt: number }): SessionToken {
+  return { token: session.token, expiresAt: session.expiresAt };
+}
+
 export async function getCurrentUser(request: Request, env: Env): Promise<AuthedUser | null> {
-  const token = getCookie(request, SESSION_COOKIE);
+  const token = sessionTokenFrom(request);
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const row = await env.DB.prepare(
@@ -178,7 +211,7 @@ export function clearedSessionCookie(secure = true): string {
 
 /** 当前请求的会话令牌哈希（改密码时用来「保留自己、踢掉其它设备」）。 */
 export async function currentSessionHash(request: Request): Promise<string | null> {
-  const token = getCookie(request, SESSION_COOKIE);
+  const token = sessionTokenFrom(request);
   return token ? sha256Hex(token) : null;
 }
 

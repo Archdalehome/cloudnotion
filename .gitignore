@@ -7,3 +7,10 @@ dist/
 .env
 .tmp-*
 tsc-out.txt
+
+# 本地运行日志（冒烟测试 / 诊断脚本输出）
+*.log
+
+# 移动端诊断脚本的截图与产物：只保留脚本本身（dist/ 截图/ 探针输出都留在本地）
+tools/mobile-check/*
+!tools/mobile-check/nocookie-login.mjs

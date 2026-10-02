@@ -1,6 +1,11 @@
 /**
  * Thin typed wrapper around the Qafield JSON API.
  * Session handling relies on the HttpOnly cookie, hence `credentials: 'same-origin'`.
+ *
+ * 另有一层兜底：Cookie 存不下来的浏览器（无痕模式、「阻止所有 Cookie」、部分 App 内嵌
+ * 浏览器）里，登录接口虽然返回 200，下一个请求却已经是未登录 —— 表现就是「登录后闪一下
+ * 又回到登录页」。这种环境下服务端会把令牌放进响应体（请求时带 `tokenInBody: true`），
+ * 由这里保存在本地并通过 `Authorization: Bearer` 头带上，见 `readSessionToken`。
  */
 import type {
   AdminDeleteUsersResponse,
@@ -14,6 +19,7 @@ import type {
   InboxResponse,
   InviteAcceptResponse,
   InviteDetail,
+  LoginResponse,
   Property,
   PropertyConfig,
   PublicDatabaseResponse,
@@ -22,6 +28,7 @@ import type {
   RowRecord,
   RowValues,
   SessionUser,
+  VerifyRegistrationResponse,
   ViewConfig,
   ViewDef,
   ViewShareCreatedResponse,
@@ -74,6 +81,35 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * 本地会话令牌的存储键。
+ *
+ * 正常情况下会话完全由 HttpOnly cookie 承载，这里什么都不存；只有服务端在响应体里
+ * 下发了令牌（客户端主动带 `tokenInBody: true`）时才用得上。
+ */
+const SESSION_TOKEN_KEY = 'qafield.session-token';
+let memoryToken: string | null = null;
+
+/** 读取本地会话令牌（无痕 / 隐私模式下 localStorage 不可用，退化为内存）。 */
+export function readSessionToken(): string | null {
+  try {
+    return window.localStorage.getItem(SESSION_TOKEN_KEY) ?? memoryToken;
+  } catch {
+    return memoryToken;
+  }
+}
+
+/** 保存会话令牌；传 `null` 清除（退出登录、会话被服务端判定失效时调用）。 */
+export function setSessionToken(token: string | null): void {
+  memoryToken = token;
+  try {
+    if (token === null) window.localStorage.removeItem(SESSION_TOKEN_KEY);
+    else window.localStorage.setItem(SESSION_TOKEN_KEY, token);
+  } catch {
+    // localStorage 直接抛异常也无所谓：令牌留在内存里，本次会话依然可用
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const init: RequestInit = {
     method: options.method ?? 'GET',
@@ -85,6 +121,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   } else if (options.body !== undefined) {
     init.body = JSON.stringify(options.body);
     init.headers = { 'content-type': 'application/json' };
+  }
+  // cookie 丢了也不怕：本地令牌通过 Authorization 头继续带着（服务端两种都认）
+  const token = readSessionToken();
+  if (token) {
+    init.headers = { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${token}` };
   }
 
   const response = await fetch(path, init);
@@ -118,13 +159,25 @@ export const api = {
   register: (body: { email: string; password: string; name: string }) =>
     json<RegistrationPending>('/api/auth/register', 'POST', body),
   /** 注册第二步：填确认码，成功即返回已登录用户 */
-  verifyRegistration: (body: { email: string; code: string }) =>
-    json<{ user: SessionUser; emailVerified: true }>('/api/auth/register/verify', 'POST', body),
+  verifyRegistration: (body: { email: string; code: string; tokenInBody?: boolean }) =>
+    json<VerifyRegistrationResponse>('/api/auth/register/verify', 'POST', body),
   /** 重新发送注册确认码（同一邮箱 60 秒一次） */
   resendRegistrationCode: (body: { email: string }) =>
     json<RegistrationPending>('/api/auth/register/resend', 'POST', body),
-  login: (body: { email: string; password: string }) => json<{ user: SessionUser }>('/api/auth/login', 'POST', body),
-  logout: () => json<{ ok: true }>('/api/auth/logout', 'POST'),
+  /**
+   * 登录。`tokenInBody: true` 时响应体里会多带一个会话令牌，供 Cookie 存不下来的
+   * 浏览器兜底（见文件头部说明），正常调用不需要它。
+   */
+  login: (body: { email: string; password: string; tokenInBody?: boolean }) =>
+    json<LoginResponse>('/api/auth/login', 'POST', body),
+  /** 退出登录：服务端作废会话，同时清掉本地的兜底令牌 */
+  logout: async () => {
+    try {
+      return await json<{ ok: true }>('/api/auth/logout', 'POST');
+    } finally {
+      setSessionToken(null);
+    }
+  },
   /** 登录后自助改密码（其它设备的会话会立即失效） */
   changePassword: (body: { currentPassword: string; newPassword: string }) =>
     json<{ ok: true; sessionsRevoked: boolean }>('/api/auth/password', 'POST', body),
@@ -153,7 +206,7 @@ export const api = {
   /** 受邀人打开邀请链接：邀请信息（表格 / 视图 / 邀请人），无需登录 */
   invite: (token: string) => json<{ invite: InviteDetail }>(`/api/invites/${encodeURIComponent(token)}`, 'GET'),
   /** 接受邀请：填昵称 + 密码即完成注册，并直接登录（自动获得该视图分享） */
-  acceptInvite: (token: string, body: { name: string; password: string }) =>
+  acceptInvite: (token: string, body: { name: string; password: string; tokenInBody?: boolean }) =>
     json<InviteAcceptResponse>(`/api/invites/${encodeURIComponent(token)}/accept`, 'POST', body),
 
   listDatabases: () => json<{ databases: DatabaseSummary[] }>('/api/databases', 'GET'),

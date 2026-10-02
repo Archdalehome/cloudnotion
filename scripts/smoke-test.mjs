@@ -246,6 +246,65 @@ async function main() {
   check('a new account has no starter table', starterCount === 0, `${starterCount} table(s)`);
   check('session exposes app meta', typeof session.data?.appName === 'string' && typeof session.data?.maxUploadMb === 'number');
 
+  // ------------------------------- 会话兜底：Cookie 存不下来的手机浏览器（tokenInBody）
+  section('session fallback (tokenInBody + Authorization)');
+  const bearerEmail = `smoke+bearer+${Date.now()}@example.com`;
+  const bearerAccount = await registerAccount({ email: bearerEmail, name: 'Bearer' });
+  check(
+    'register without cookie still works',
+    bearerAccount.verified?.status === 201,
+    `status=${bearerAccount.verified?.status ?? 'n/a'}`,
+  );
+  check('a normal login keeps the token out of the body', bearerAccount.verified?.data?.session === undefined);
+  // 两个账号用同一个密码，这里只校验「不带 tokenInBody 时不下发令牌」
+  const plainLogin = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email, password: PASSWORD },
+  });
+  check('login (no tokenInBody) returns no session token', plainLogin.data?.session === undefined);
+  check('login still sets the session cookie', /cn_session=/.test(plainLogin.headers.get('set-cookie') ?? ''));
+
+  const tokenLogin = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email, password: PASSWORD, tokenInBody: true },
+  });
+  const bearerToken = tokenLogin.data?.session?.token;
+  check(
+    'login with tokenInBody returns a session token',
+    typeof bearerToken === 'string' && bearerToken.length > 20 && typeof tokenLogin.data?.session?.expiresAt === 'number',
+  );
+
+  const bearerSession = await call('/api/session', {
+    cookie: false,
+    headers: { authorization: `Bearer ${bearerToken}` },
+  });
+  check(
+    'Authorization: Bearer alone authenticates /api/session',
+    bearerSession.status === 200 && bearerSession.data?.user?.email === email,
+    `status=${bearerSession.status}`,
+  );
+
+  const bogusSession = await call('/api/session', { cookie: false, headers: { authorization: 'Bearer not-a-real-token' } });
+  check(
+    'a bogus bearer token is treated as signed out',
+    bogusSession.status === 200 && bogusSession.data?.user === null,
+    `status=${bogusSession.status}`,
+  );
+
+  const bearerLogout = await call('/api/auth/logout', {
+    cookie: false,
+    headers: { authorization: `Bearer ${bearerToken}` },
+    method: 'POST',
+  });
+  check('logout works with a bearer token', bearerLogout.status === 200 && bearerLogout.data?.ok === true);
+  const bearerAfterLogout = await call('/api/session', {
+    cookie: false,
+    headers: { authorization: `Bearer ${bearerToken}` },
+  });
+  check('the bearer token is revoked by logout', bearerAfterLogout.data?.user === null);
+
   // ------------------------------------------------------------- table + fields
   section('tables and fields');
   const created = await call('/api/databases', {

@@ -70,9 +70,9 @@ npm run deploy                 # vite build && wrangler deploy
 ## 5. 部署后验证
 
 ```bash
-# 冒烟测试（199 项断言，覆盖两步注册/登录/建表/记录/视图/分享/成员/附件/改密码/用户管理）
+# 冒烟测试（227 项断言，覆盖两步注册/登录/建表/记录/视图/分享/成员/附件/改密码/用户管理/会话兜底）
 # 线上跑同一套断言：唯一会改密码的「重置自己密码」只对 @example.* 测试管理员执行，
-# 真实 ADMIN_EMAIL 会自动跳过那 2 项（结果 197/197），不会重置你的密码、也不会踢你下线
+# 真实 ADMIN_EMAIL 会自动跳过那 2 项（结果 225/225），不会重置你的密码、也不会踢你下线
 BASE_URL=https://cloudnotion.<your-subdomain>.workers.dev node scripts/smoke-test.mjs
 
 # 路由自检
@@ -96,6 +96,11 @@ npm run check:routes
 5. 收起侧边栏（宽屏点侧边栏头部 `«`，手机端点顶部条 ☰ 关掉抽屉）后，页面右上角顶部条应显示当前账号的用户名 / 邮箱与「退出」，点「退出」回到登录页
 6. 侧边栏底部的「改密码」：填当前密码 + 新密码 → 成功后其他设备的会话立即失效，本机继续可用
 7. 用 `ADMIN_EMAIL` 登录后，侧边栏底部会多出「用户管理」：搜一个已注册邮箱 → 改昵称 / 邮箱 → 「重置密码」应弹出新密码（配了 Resend 时同一份密码也会发到对方邮箱）
+8. **无痕模式 / 手机（Cookie 存不下来）也能正常登录**：这些环境会把 `Set-Cookie` 丢掉，登录（或点邀请链接注册）后应**稳定停在内容页**，不会闪一下又退回登录页 —— 客户端会用响应体里的令牌兜底（存本地 + `Authorization: Bearer`）。想离线复现这条路径：
+   ```bash
+   # 本地起一个「丢掉 Set-Cookie」的反向代理，用 390x844 手机视口真跑一遍登录（需要本机装了 Edge / Chrome）
+   node tools/mobile-check/nocookie-login.mjs "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" http://127.0.0.1:8787 you@example.com <密码>
+   ```
 
 ## 6. GitHub Actions 自动部署（CI/CD）
 
@@ -171,7 +176,7 @@ npm run typecheck ; npm run check:routes ; npm run build:client
 npm run db:migrate:local
 cp .dev.vars.example .dev.vars          # 本地管理员账号 + 测试域回显白名单（冒烟测试要用）
 npx wrangler dev --port 8787 --local    # 另开一个终端保持运行
-node scripts/smoke-test.mjs             # 期望 199/199 checks passed
+node scripts/smoke-test.mjs             # 期望 227/227 checks passed（.dev.vars.example 里的 admin@example.com 是测试管理员，跑满 227）
 ```
 
 ### 6.6 邮件（Resend）与超级管理员

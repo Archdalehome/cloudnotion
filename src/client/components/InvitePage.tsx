@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import type { InviteDetail, SessionUser } from '../../shared/types';
 import { ApiError, api } from '../api';
+import { confirmSessionLanded } from '../lib/session';
 
 interface InvitePageProps {
   token: string;
@@ -49,6 +50,12 @@ export function InvitePage({ token, onAuthenticated, onGoToLogin }: InvitePagePr
     setError('');
     try {
       const result = await api.acceptInvite(token, { name: name.trim(), password });
+      // 邀请已经消费掉了，兜底只能走刚设置的密码重新登录（cookie 存不下来的浏览器）
+      const landing = await confirmSessionLanded({ email: detail?.email ?? '', password });
+      if (!landing.ok) {
+        setError(`${landing.message ?? '注册完成，但登录状态没能保存'}（账号已创建，可以直接登录）`);
+        return;
+      }
       onAuthenticated(result.user);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : '注册失败，请稍后再试');
