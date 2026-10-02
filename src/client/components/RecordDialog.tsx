@@ -93,7 +93,10 @@ export function RecordDialog({
                     onCancel={() => setEditingId(null)}
                   />
                 ) : FIELD_META[property.type].computed ? (
-                  <span className="cell-static">{computedText(property, row, users)}</span>
+                  // 文字放在 .cell-text 里才画得出省略号（记录卡片窄，长名字最容易溢出）
+                  <span className="cell-static">
+                    <span className="cell-text">{computedText(property, row, users)}</span>
+                  </span>
                 ) : (
                   <CellView
                     property={property}

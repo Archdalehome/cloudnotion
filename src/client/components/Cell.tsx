@@ -83,7 +83,13 @@ export function CellView({
   const value = row.values[property.id];
 
   if (property.type === 'created_time' || property.type === 'updated_time' || property.type === 'created_by' || property.type === 'updated_by') {
-    return <span className="cell-static muted">{computedText(property, row, users)}</span>;
+    // 计算字段是只读的：外层还是 .cell-static，但文字得躺在 .cell-text 这一层，
+    // 省略号才画得出来（见 styles.css 里「.cell-view > .cell-text」的说明）
+    return (
+      <span className="cell-static muted">
+        <span className="cell-text">{computedText(property, row, users)}</span>
+      </span>
+    );
   }
 
   const empty = isEmptyValue(value);
@@ -116,7 +122,7 @@ export function CellView({
       );
       break;
     case 'date':
-      content = <span>{formatDateValue(value as DateValue | undefined, property.config)}</span>;
+      content = <span className="cell-text">{formatDateValue(value as DateValue | undefined, property.config)}</span>;
       break;
     case 'files':
       content = (
@@ -141,14 +147,15 @@ export function CellView({
     case 'url': {
       const href = typeof value === 'string' ? value : '';
       content = href ? (
-        <a className="link" href={href} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+        <a className="link cell-text" href={href} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
           {href}
         </a>
       ) : null;
       break;
     }
     default:
-      content = <span>{formatValueForDisplay(property.type, value, property.config, { users })}</span>;
+      // 普通文本 / 数字 / 电话…：这一层才是那个「装文字的盒子」，省略号靠它
+      content = <span className="cell-text">{formatValueForDisplay(property.type, value, property.config, { users })}</span>;
   }
 
   return (

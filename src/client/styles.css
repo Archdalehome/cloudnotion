@@ -568,6 +568,32 @@ textarea.input {
   text-overflow: ellipsis;
 }
 
+/*
+ * 单行省略（移动端窄列尤其明显）——这里的坑写清楚，改之前先读：
+ *
+ * text-overflow: ellipsis 只对「**自己就是裁剪盒**、且行内内容直接躺在这个盒子里」
+ * 的元素生效。.cell-view / .cell-static 是 flex 容器，文字装在自己的子元素里，
+ * 所以把 overflow/nowrap/ellipsis 写在容器上既不画「…」、也不会让子元素被裁
+ * （右端只会被硬切掉一截）。
+ *
+ * 真正干活的是承载文字的那一层 .cell-text：
+ *   - min-width: 0 —— flex 子项默认 min-width:auto（= 内容的 min-content 宽），
+ *     不给 0 就永远「不肯收缩」，整格会把列宽顶开、也就无从省略；
+ *   - overflow + nowrap + ellipsis —— 三个一起才是浏览器画「…」的充要条件。
+ *
+ * 省略方向按 LTR 走：**保头 + 末尾「…」**（开头一定看得见，看不完的尾巴用 … 标出）。
+ * 代价是长文件名的结尾（.mp4 之类）看不到；要改「保尾」就把 direction 换 rtl
+ * 并加 text-align: left，但那样开头就被吃掉了，两害取其一。
+ */
+.cell-view > .cell-text,
+.cell-static > .cell-text {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .cell-view:disabled {
   cursor: default;
   color: var(--text);
@@ -654,6 +680,11 @@ textarea.input {
   align-items: center;
   min-height: 32px;
   padding: 2px 6px;
+  /* 只读字段（创建时间 / 创建人…）在网格与记录卡片里都是单行展示。
+     容器本身画不出「…」，真正的省略交给里面的 .cell-text（见上面的说明），
+     这里只需要保证它自己肯收缩，别把列/卡片顶开。 */
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1184,6 +1215,10 @@ textarea.input {
 }
 
 .title-input {
+  /* 表格名很长时（移动端一行只剩一小段宽度）也得单行省略：
+     <input> 没有子元素、自己就是「装文字的盒子」，所以能直接画「…」，
+     不用像 .cell-view 那样套一层文字盒子。聚焦时浏览器按光标滚动处理，
+     看不到省略号，失焦后即恢复「保头 + 末尾 …」。 */
   min-width: 180px;
   padding: 2px 6px;
   border: 1px solid transparent;
@@ -1191,6 +1226,9 @@ textarea.input {
   background: transparent;
   font-size: 18px;
   font-weight: 700;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .title-input:hover:not(:disabled) {
@@ -1204,9 +1242,15 @@ textarea.input {
 }
 
 .title-static {
+  /* 共享页顶部那张表的名字：和 .title-input 同一行，同样「保头 + 末尾 …」 */
+  min-width: 0;
+  max-width: 100%;
   padding: 2px 6px;
   font-size: 18px;
   font-weight: 700;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .badge {
