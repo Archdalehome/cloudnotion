@@ -81,7 +81,8 @@ npm run check:routes
 
 > 线上跑冒烟测试前，建议先在 Worker 上配好 `ADMIN_EMAIL` + `ADMIN_PASSWORD`（第 6.6 节）：
 > 配了就会连「用户管理」一起测（工作流会把仓库里同名的 Secrets 透传给线上冒烟测试；未配置时回落到
-> `admin@example.com`，该段自动 `skip`，其余断言照跑）。
+> `admin@example.com`，该段自动 `skip`，其余断言照跑 —— 实测这类跑法是 **204/204 checks passed**，
+> 不是失败，别误判）。
 > 唯一会改数据的断言是「重置自己密码」——它只对 `@example.*` 的测试管理员跑，
 > 线上用真实 `ADMIN_EMAIL` 时会自动跳过（不会重置你的密码 / 踢你下线；要强制跑设 `SMOKE_ADMIN_SELF_RESET=1`）。
 > 另外注册/重置密码时只有**保留测试域**（`AUTH_ECHO_CODE_DOMAINS`）才会回显确认码，
