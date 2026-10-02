@@ -31,6 +31,15 @@ export function conflict(message: string, code = 'conflict'): HttpError {
   return new HttpError(409, code, message);
 }
 
+export function tooManyRequests(message: string, code = 'too_many_requests'): HttpError {
+  return new HttpError(429, code, message);
+}
+
+/** 依赖邮件服务的接口失败时用（Resend 拒收 / 网络异常 / 未配置发件人） */
+export function badGateway(message: string, code = 'email_send_failed'): HttpError {
+  return new HttpError(502, code, message);
+}
+
 export function json(data: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set('content-type', 'application/json; charset=utf-8');
@@ -227,6 +236,14 @@ export function sqlNumber(row: SqlRow, key: string, fallback = 0): number {
 export function sqlNullableString(row: SqlRow, key: string): string | null {
   const value = row[key];
   return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/** 数字列上的 NULL（例如 `MAX(...)` 没有命中任何行）要保留成 null，而不是 0。 */
+export function sqlNullableNumber(row: SqlRow, key: string): number | null {
+  const value = row[key];
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 

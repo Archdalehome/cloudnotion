@@ -21,6 +21,12 @@ interface SidebarProps {
   /** 收起侧边栏（手机端会同时移除遮罩层） */
   onClose: () => void;
   onLogout: () => void;
+  /** 打开「修改密码」弹窗 */
+  onChangePassword: () => void;
+  /** 当前主区域是不是「用户管理」（管理员才有） */
+  adminView: boolean;
+  /** 打开用户管理（仅 `user.isAdmin` 时入口可见） */
+  onOpenAdmin: () => void;
   /** 展开收件箱前刷新一次 */
   onInboxRefresh: () => void;
   /** 点开一条私信：已读 + 打开记录卡片并定位到那条备注 */
@@ -40,6 +46,9 @@ export function Sidebar({
   onCreate,
   onClose,
   onLogout,
+  onChangePassword,
+  adminView,
+  onOpenAdmin,
   onInboxRefresh,
   onInboxSelect,
 }: SidebarProps) {
@@ -193,9 +202,30 @@ export function Sidebar({
         )}
       </div>
 
+      {user?.isAdmin ? (
+        <>
+          <div className="sidebar-section">
+            <div className="row">
+              <span>管理</span>
+            </div>
+          </div>
+          <div className="sidebar-list">
+            <button
+              type="button"
+              className={`sidebar-item${adminView ? ' active' : ''}`}
+              title="用户管理"
+              onClick={onOpenAdmin}
+            >
+              <span>⚙️</span>
+              <span className="label">用户管理</span>
+            </button>
+          </div>
+        </>
+      ) : null}
+
       <div className="sidebar-foot">
         <div className="row gap">
-          <UserChip user={user} onLogout={onLogout} />
+          <UserChip user={user} onLogout={onLogout} onChangePassword={onChangePassword} />
         </div>
       </div>
     </aside>

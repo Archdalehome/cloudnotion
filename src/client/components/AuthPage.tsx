@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { SessionUser } from '../../shared/types';
+import { useEffect, useRef, useState } from 'react';
+import type { RegistrationPending, SessionUser } from '../../shared/types';
 import { ApiError, api } from '../api';
 
 interface AuthPageProps {
@@ -7,31 +7,176 @@ interface AuthPageProps {
   onAuthenticated: (user: SessionUser) => void;
 }
 
+/** 重发确认码的冷却秒数，与 Worker 端 `RESEND_COOLDOWN_MS` 一致 */
+const RESEND_COOLDOWN_SECONDS = 60;
+
 export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  /** 注册是两步：先填资料（form），再填邮件里的确认码（code） */
+  const [step, setStep] = useState<'form' | 'code'>('form');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [pending, setPending] = useState<RegistrationPending | null>(null);
+  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const codeInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 重发倒计时
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setInterval(() => setCooldown((left) => (left > 0 ? left - 1 : 0)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
+
+  const describe = (cause: unknown, fallback: string) =>
+    cause instanceof ApiError ? cause.message : fallback;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError('');
+    setNotice('');
     try {
-      const result =
-        mode === 'login'
-          ? await api.login({ email: email.trim(), password })
-          : await api.register({ email: email.trim(), password, name: name.trim() });
-      onAuthenticated(result.user);
+      if (mode === 'login') {
+        const result = await api.login({ email: email.trim(), password });
+        onAuthenticated(result.user);
+        return;
+      }
+      // 注册第一步：Worker 会把 6 位确认码发到邮箱（本地/测试环境直接在响应里回显）
+      const result = await api.register({ email: email.trim(), password, name: name.trim() });
+      setPending(result);
+      setCode('');
+      setCooldown(RESEND_COOLDOWN_SECONDS);
+      setStep('code');
+      setNotice(
+        result.emailDelivered
+          ? `确认码已发送到 ${result.email}，${result.ttlMinutes} 分钟内有效。`
+          : `邮件服务未配置，确认码已直接显示在下方（${result.ttlMinutes} 分钟内有效）。`,
+      );
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : '请求失败，请稍后再试');
+      setError(describe(cause, '请求失败，请稍后再试'));
     } finally {
       setBusy(false);
     }
   };
 
+  const verify = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api.verifyRegistration({ email: email.trim(), code: code.trim() });
+      onAuthenticated(result.user);
+    } catch (cause) {
+      setError(describe(cause, '确认失败，请稍后再试'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resend = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api.resendRegistrationCode({ email: email.trim() });
+      setPending(result);
+      setCooldown(RESEND_COOLDOWN_SECONDS);
+      setNotice(
+        result.emailDelivered
+          ? `确认码已重新发送到 ${result.email}。`
+          : `邮件服务未配置，新确认码已直接显示在下方。`,
+      );
+      codeInputRef.current?.focus();
+    } catch (cause) {
+      setError(describe(cause, '重新发送失败，请稍后再试'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const switchMode = (next: 'login' | 'register') => {
+    setMode(next);
+    setStep('form');
+    setCode('');
+    setPending(null);
+    setError('');
+    setNotice('');
+  };
+
+
+  // ---------------------------------------------------------- 注册第二步
+  if (mode === 'register' && step === 'code') {
+    return (
+      <div className="centered">
+        <form className="auth-card" onSubmit={verify}>
+          <h1>{appName}</h1>
+          <p className="muted">输入邮件里的确认码，完成注册</p>
+
+          <p className="small muted">
+            确认码收件邮箱：<strong>{email}</strong>
+          </p>
+
+          {pending && !pending.emailDelivered && pending.devCode ? (
+            <p className="hint-box small">
+              📮 邮件服务未配置（或收件人是测试域），确认码是 <strong className="code-echo">{pending.devCode}</strong>
+            </p>
+          ) : null}
+
+          {notice ? <p className="small muted">{notice}</p> : null}
+
+          <label className="field">
+            <span>6 位确认码</span>
+            <input
+              ref={codeInputRef}
+              className="input code-input"
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="000000"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              autoFocus
+              required
+            />
+          </label>
+
+          {error ? <p className="error small">{error}</p> : null}
+
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={busy || code.length !== 6}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            {busy ? '处理中…' : '完成注册'}
+          </button>
+
+          <div className="row gap" style={{ marginTop: 10, justifyContent: 'center' }}>
+            <button type="button" className="btn ghost small" onClick={resend} disabled={busy || cooldown > 0}>
+              {cooldown > 0 ? `重新发送（${cooldown}s）` : '重新发送确认码'}
+            </button>
+            <button
+              type="button"
+              className="btn ghost small"
+              onClick={() => {
+                setStep('form');
+                setError('');
+                setNotice('');
+              }}
+            >
+              改注册信息
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  // ------------------------------------------------------------- 登录 / 注册
   return (
     <div className="centered">
       <form className="auth-card" onSubmit={submit}>
@@ -86,10 +231,14 @@ export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
           />
         </label>
 
+        {mode === 'register' ? (
+          <p className="small muted">注册需要邮箱确认：提交后我们会把 6 位确认码发到这个邮箱。</p>
+        ) : null}
+
         {error ? <p className="error small">{error}</p> : null}
 
         <button className="btn primary" type="submit" disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>
-          {busy ? '处理中…' : mode === 'login' ? '登录' : '注册'}
+          {busy ? '处理中…' : mode === 'login' ? '登录' : '发送确认码'}
         </button>
 
         <p className="small muted" style={{ textAlign: 'center', marginTop: 12 }}>
@@ -97,10 +246,7 @@ export function AuthPage({ appName, onAuthenticated }: AuthPageProps) {
           <button
             type="button"
             className="btn ghost small"
-            onClick={() => {
-              setMode(mode === 'login' ? 'register' : 'login');
-              setError('');
-            }}
+            onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
           >
             {mode === 'login' ? '立即注册' : '去登录'}
           </button>

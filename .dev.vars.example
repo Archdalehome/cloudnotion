@@ -1,0 +1,23 @@
+# 本地开发环境变量模板：复制成 .dev.vars 后按需修改
+#   Windows PowerShell: Copy-Item .dev.vars.example .dev.vars
+#   macOS / Linux:      cp .dev.vars.example .dev.vars
+#
+# .dev.vars 已在 .gitignore 里，切勿提交（里面放的是真实密钥）。
+# 线上不要用这个文件：用 `npx wrangler secret put <NAME>`，或配置仓库同名的 GitHub Secrets，
+# deploy 阶段会自动 sync 到 Worker。详见 DEPLOY.md 6.6。
+
+# Resend 发信密钥（https://resend.com/api-keys）。
+# 留空 = 不发真邮件：注册确认码直接回显在接口响应里（devCode，仅测试域可用），
+# 本地开发与 CI 冒烟测试靠它自动跑完注册流程。
+RESEND_API_KEY=
+# 发件人。onboarding@resend.dev 只能发给 Resend 账号本人的邮箱；绑定自己的域名后再改。
+RESEND_FROM_EMAIL=CloudNotion <onboarding@resend.dev>
+
+# 超级管理员：这两个值一配上，第一次登录（或 GET /api/session）就会自动创建 / 提升该账号
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=Smoke1admin
+# 只有在忘记管理员密码时才临时设为 true：下一次登录用 ADMIN_PASSWORD 覆盖现有密码，改完记得删掉
+# ADMIN_RESET_PASSWORD=true
+
+# 保留测试域白名单（wrangler.jsonc 里也配了一份，这里可以按需加自己的测试域）
+AUTH_ECHO_CODE_DOMAINS=example.com,example.org,example.net

@@ -8,13 +8,31 @@
  *   node scripts/smoke-test.mjs
  *   BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
  *
- * It registers a throw-away account and walks the critical path: session ->
- * create table -> add field -> records (create/update/duplicate/delete) ->
- * views -> share links -> public read + edit -> members -> notes + @mention
- * inbox -> file upload -> cleanup. Exit code is 1 when any check fails.
+ * It registers throw-away accounts and walks the critical path: two-step
+ * signup (email code) -> session -> create table -> add field -> records
+ * (create/update/duplicate/delete) -> views -> share links -> public read +
+ * edit -> members -> notes + @mention inbox -> password change -> admin panel
+ * -> file upload -> cleanup. Exit code is 1 when any check fails.
+ *
+ * Signup needs the 6-digit code that the API emails out. To keep this runnable
+ * unattended, `POST /api/auth/register` echoes it back as `devCode` whenever
+ * RESEND_API_KEY is missing or the recipient domain is listed in
+ * AUTH_ECHO_CODE_DOMAINS (example.com & co.), and that is what this script
+ * uses. Point it at a target that really sends email to a non-test domain and
+ * the signup section fails fast with an explanation.
+ *
+ * The admin section signs in with ADMIN_EMAIL / ADMIN_PASSWORD (defaults below
+ * match the throw-away admin that CI writes into .dev.vars). When those
+ * credentials do not exist on the target, the admin checks are skipped - not
+ * failed - so the script stays usable against production.
  */
 const BASE = (process.env.BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const PASSWORD = process.env.SMOKE_PASSWORD ?? 'Smoke1test';
+/** 同步注册后的新密码（改密码那一段用） */
+const NEW_PASSWORD = process.env.SMOKE_NEW_PASSWORD ?? 'Smoke2test';
+/** 超级管理员（本地 e2e 由 CI 写进 .dev.vars；线上没配就跳过管理员断言） */
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL ?? 'admin@example.com').trim().toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'Smoke1admin';
 
 let cookie = '';
 const checks = [];
@@ -90,6 +108,29 @@ function textOf(value) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/**
+ * 两步注册：`POST /api/auth/register` 只登记「待确认的注册」并发出 6 位确认码（202），
+ * 把确认码填回 `/api/auth/register/verify` 才真正建账号（201，并自动登录）。
+ * 响应的 `devCode` 只在「没配邮件服务 / 收件人是保留测试域」时出现，
+ * 所以拿不到它时返回 `verified: null`，由调用方决定怎么报错。
+ */
+async function registerAccount({ email, name, password = PASSWORD, keepSession = false }) {
+  const started = await call('/api/auth/register', {
+    cookie: keepSession,
+    method: 'POST',
+    body: { email, password, name },
+  });
+  const code = typeof started.data?.devCode === 'string' ? started.data.devCode : '';
+  const verified = code
+    ? await call('/api/auth/register/verify', {
+        cookie: keepSession,
+        method: 'POST',
+        body: { email, code },
+      })
+    : null;
+  return { started, verified, code, email };
+}
+
 /** 与 `src/shared/fields.ts` 的 `CELL_EDIT_GRACE_MS` 保持一致：单元格「限制编辑」的 10 秒计时窗口 */
 const CELL_EDIT_GRACE_MS = 10_000;
 
@@ -113,19 +154,82 @@ async function main() {
   // ---------------------------------------------------------------- account
   section('account');
   const email = `smoke+${Date.now()}@example.com`;
-  const registered = await call('/api/auth/register', {
+
+  // 第一步：只提交注册信息 -> 202 + 确认码（保留测试域会回显在 devCode 里）
+  const pending = await call('/api/auth/register', {
     method: 'POST',
     body: { email, password: PASSWORD, name: 'Smoke Tester' },
   });
-  if (!check('register', registered.status === 201 && registered.data?.user?.email === email, `status=${registered.status}`)) {
-    if (registered.status === 403) console.error('   (signup is disabled: ALLOW_SIGNUP="false")');
+  if (pending.status === 403) console.error('   (signup is disabled: ALLOW_SIGNUP="false")');
+  check(
+    'register asks for an email code',
+    pending.status === 202 && pending.data?.pending === true,
+    `status=${pending.status}`,
+  );
+  check(
+    'signup code has a sane TTL',
+    Number(pending.data?.ttlMinutes) >= 1 && Number(pending.data?.expiresInSeconds) > 0,
+    `ttl=${pending.data?.ttlMinutes}min`,
+  );
+  if (!check('signup code is echoed for reserved test domains', /^\d{6}$/.test(String(pending.data?.devCode ?? '')), `devCode=${pending.data?.devCode ?? ''}`)) {
+    console.error('   (the API did not echo the code: use a reserved test domain, or set AUTH_ECHO_CODE_DOMAINS on the target)');
     process.exitCode = 1;
     return;
   }
 
+  // 确认之前这个邮箱还不能登录，users 表里也不该有它
+  const unconfirmed = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email, password: PASSWORD },
+  });
+  check('an unconfirmed signup cannot log in', unconfirmed.status === 401, `status=${unconfirmed.status}`);
+
+  // 同一邮箱 60 秒内重复提交会被限流
+  const tooSoon = await call('/api/auth/register', {
+    cookie: false,
+    method: 'POST',
+    body: { email, password: PASSWORD, name: 'Smoke Tester' },
+  });
+  check('signup is throttled (60s cooldown)', tooSoon.status === 429, `status=${tooSoon.status}`);
+
+  const wrongCode = await call('/api/auth/register/verify', {
+    cookie: false,
+    method: 'POST',
+    body: { email, code: pending.data.devCode === '000000' ? '111111' : '000000' },
+  });
+  check(
+    'a wrong code is rejected',
+    wrongCode.status === 400 && wrongCode.data?.error?.code === 'code_mismatch',
+    `status=${wrongCode.status} code=${wrongCode.data?.error?.code ?? ''}`,
+  );
+
+  const registered = await call('/api/auth/register/verify', {
+    method: 'POST',
+    body: { email, code: pending.data.devCode },
+  });
+  if (!check('register', registered.status === 201 && registered.data?.user?.email === email, `status=${registered.status}`)) {
+    process.exitCode = 1;
+    return;
+  }
+  check('signup confirms the email', registered.data?.emailVerified === true);
+
+  const replayed = await call('/api/auth/register/verify', {
+    method: 'POST',
+    body: { email, code: pending.data.devCode },
+  });
+  check('a used code cannot be replayed', replayed.status === 400, `status=${replayed.status}`);
+
+  const takenEmail = await call('/api/auth/register', {
+    method: 'POST',
+    body: { email, password: PASSWORD, name: 'Copy Cat' },
+  });
+  check('a registered email cannot sign up again', takenEmail.status === 409, `status=${takenEmail.status}`);
+
   const session = await call('/api/session');
   const starterCount = session.data?.databases?.length ?? 0;
   check('session carries the new user', session.data?.user?.email === email);
+  check('session exposes the admin flag', registered.data?.user?.isAdmin === false);
   check('starter table created', starterCount >= 1, `${starterCount} table(s)`);
   check('session exposes app meta', typeof session.data?.appName === 'string' && typeof session.data?.maxUploadMb === 'number');
 
@@ -784,15 +888,12 @@ async function main() {
   section('members');
   // members can only be invited once they have an account, so create one first
   const memberEmail = `smoke-member+${Date.now()}@example.com`;
-  const collaborator = await call('/api/auth/register', {
-    cookie: false,
-    method: 'POST',
-    body: { email: memberEmail, password: PASSWORD, name: 'Smoke Collaborator' },
-  });
+  const collaboratorSignup = await registerAccount({ email: memberEmail, name: 'Smoke Collaborator' });
+  const collaborator = collaboratorSignup.verified;
   check(
     'second account for collaboration',
-    collaborator.status === 201 && collaborator.data?.user?.email === memberEmail,
-    `status=${collaborator.status}`,
+    collaborator?.status === 201 && collaborator.data?.user?.email === memberEmail,
+    `status=${collaborator?.status ?? collaboratorSignup.started.status}`,
   );
 
   const invited = await call(`/api/databases/${databaseId}/members`, {
@@ -1520,6 +1621,191 @@ async function main() {
   }
 
   // ------------------------------------------------------------------ cleanup
+  // ------------------------------------------------- 改密码（登录后自助修改）
+  section('password change');
+  const otherLogin = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email, password: PASSWORD },
+  });
+  const otherCookie = String(otherLogin.headers.get('set-cookie') ?? '').split(';')[0];
+  check(
+    'a second device can sign in',
+    otherLogin.status === 200 && Boolean(otherCookie),
+    `status=${otherLogin.status}`,
+  );
+
+  const wrongCurrent = await call('/api/auth/password', {
+    method: 'POST',
+    body: { currentPassword: 'NotMyPassword1', newPassword: NEW_PASSWORD },
+  });
+  check(
+    'changing the password needs the current one',
+    wrongCurrent.status === 400 && wrongCurrent.data?.error?.code === 'wrong_password',
+    `status=${wrongCurrent.status} code=${wrongCurrent.data?.error?.code ?? ''}`,
+  );
+
+  const samePassword = await call('/api/auth/password', {
+    method: 'POST',
+    body: { currentPassword: PASSWORD, newPassword: PASSWORD },
+  });
+  check('the new password must differ from the old one', samePassword.status === 400, `status=${samePassword.status}`);
+
+  const weakPassword = await call('/api/auth/password', {
+    method: 'POST',
+    body: { currentPassword: PASSWORD, newPassword: 'short' },
+  });
+  check('the new password must be strong enough', weakPassword.status === 400, `status=${weakPassword.status}`);
+
+  const changed = await call('/api/auth/password', {
+    method: 'POST',
+    body: { currentPassword: PASSWORD, newPassword: NEW_PASSWORD },
+  });
+  check(
+    'change the password',
+    changed.status === 200 && changed.data?.ok === true && changed.data?.sessionsRevoked === true,
+    `status=${changed.status}`,
+  );
+
+  const evicted = await call('/api/session', { cookie: false, headers: { cookie: otherCookie } });
+  check('changing the password logs other devices out', evicted.data?.user === null, `user=${evicted.data?.user ?? 'null'}`);
+
+  const stillHere = await call('/api/session');
+  check('the current device stays signed in', stillHere.data?.user?.email === email);
+
+  const oldPassword = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email, password: PASSWORD },
+  });
+  check('the old password stops working', oldPassword.status === 401, `status=${oldPassword.status}`);
+
+  const newLogin = await call('/api/auth/login', {
+    method: 'POST',
+    body: { email, password: NEW_PASSWORD },
+  });
+  check(
+    'the new password works',
+    newLogin.status === 200 && newLogin.data?.user?.email === email,
+    `status=${newLogin.status}`,
+  );
+
+  // --------------------------------------------- 用户管理（超级管理员 / 超级用户）
+  section('admin panel');
+  const ownerSession = cookie;
+  const adminLogin = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+  });
+  if (adminLogin.status === 401) {
+    console.log(`  skip  admin checks  (no admin account for ${ADMIN_EMAIL} on this target)`);
+  } else {
+    const adminCookie = String(adminLogin.headers.get('set-cookie') ?? '').split(';')[0];
+    /** 以管理员身份发请求，不碰全局 cookie（它还是上一位登录用户的会话） */
+    const asAdmin = (path, options = {}) =>
+      call(path, { ...options, cookie: false, headers: { cookie: adminCookie, ...(options.headers ?? {}) } });
+
+    check('the configured admin can sign in', adminLogin.data?.user?.isAdmin === true, `status=${adminLogin.status}`);
+
+    const anonList = await call('/api/admin/users', { cookie: false });
+    check('the user list needs a session', anonList.status === 401, `status=${anonList.status}`);
+
+    const asOwner = await call('/api/admin/users', { cookie: false, headers: { cookie: ownerSession } });
+    check('a normal account is not an admin', asOwner.status === 403, `status=${asOwner.status}`);
+
+    const list = await asAdmin(`/api/admin/users?search=${encodeURIComponent(email)}`);
+    const smokeUser = (list.data?.users ?? []).find((item) => item.email === email);
+    check(
+      'searching by email finds the account',
+      list.status === 200 && Boolean(smokeUser),
+      `status=${list.status} total=${list.data?.total ?? ''} matches=${(list.data?.users ?? []).length}`,
+    );
+    check(
+      'the user list carries counters + last seen',
+      typeof smokeUser?.databaseCount === 'number' && typeof smokeUser?.sharedCount === 'number' && typeof smokeUser?.lastSeenAt === 'number',
+      `tables=${smokeUser?.databaseCount ?? ''} shared=${smokeUser?.sharedCount ?? ''} lastSeen=${smokeUser?.lastSeenAt ? 'yes' : 'no'}`,
+    );
+
+    const memberList = await asAdmin(`/api/admin/users?search=${encodeURIComponent(memberEmail)}`);
+    const memberUser = (memberList.data?.users ?? []).find((item) => item.email === memberEmail);
+    const adminList = await asAdmin(`/api/admin/users?search=${encodeURIComponent(ADMIN_EMAIL)}`);
+    const adminRow = (adminList.data?.users ?? []).find((item) => item.email === ADMIN_EMAIL);
+    check(
+      'the admin sees every registered user',
+      Boolean(memberUser) && Boolean(adminRow),
+      `member=${memberUser ? 'yes' : 'no'} admin=${adminRow ? 'yes' : 'no'}`,
+    );
+    check('the admin is flagged in the list', adminRow?.isAdmin === true, `isAdmin=${adminRow?.isAdmin ?? ''}`);
+
+    const renamed = smokeUser
+      ? await asAdmin(`/api/admin/users/${smokeUser.id}`, {
+          method: 'PATCH',
+          body: { name: 'Smoke Tester（管理员改名）' },
+        })
+      : { status: 0, data: null };
+    check(
+      'edit a user profile',
+      renamed.status === 200 && renamed.data?.user?.name === 'Smoke Tester（管理员改名）',
+      `status=${renamed.status} name=${renamed.data?.user?.name ?? ''}`,
+    );
+
+    const clashingEmail = smokeUser
+      ? await asAdmin(`/api/admin/users/${smokeUser.id}`, { method: 'PATCH', body: { email: memberEmail } })
+      : { status: 0, data: null };
+    check('an email already in use is rejected', clashingEmail.status === 409, `status=${clashingEmail.status}`);
+
+    const unknownUser = await asAdmin('/api/admin/users/does-not-exist', { method: 'PATCH', body: { name: 'nobody' } });
+    check('editing an unknown user is a 404', unknownUser.status === 404, `status=${unknownUser.status}`);
+
+    // 重置别人的密码：新密码回显给管理员（测试域不发信），对方所有会话作废
+    const reset = memberUser
+      ? await asAdmin(`/api/admin/users/${memberUser.id}/password`, { method: 'POST', body: {} })
+      : { status: 0, data: null };
+    const tempPassword = typeof reset.data?.password === 'string' ? reset.data.password : '';
+    check(
+      'reset another user password',
+      reset.status === 200 &&
+        tempPassword.length >= 8 &&
+        /[A-Za-z]/.test(tempPassword) &&
+        /\d/.test(tempPassword) &&
+        reset.data?.sessionsRevoked === true,
+      `status=${reset.status} chars=${tempPassword.length}`,
+    );
+    check('the reset password is echoed for test domains', reset.data?.emailed === false, `emailed=${reset.data?.emailed}`);
+
+    const memberLogin = await call('/api/auth/login', {
+      cookie: false,
+      method: 'POST',
+      body: { email: memberEmail, password: tempPassword },
+    });
+    check('the member signs in with the temporary password', memberLogin.status === 200, `status=${memberLogin.status}`);
+
+    const deadMemberPassword = await call('/api/auth/login', {
+      cookie: false,
+      method: 'POST',
+      body: { email: memberEmail, password: PASSWORD },
+    });
+    check("the member's old password stops working", deadMemberPassword.status === 401, `status=${deadMemberPassword.status}`);
+
+    const unknownReset = await asAdmin('/api/admin/users/does-not-exist/password', { method: 'POST', body: {} });
+    check('resetting an unknown user is a 404', unknownReset.status === 404, `status=${unknownReset.status}`);
+
+    // 给自己重置：连自己当前的会话也一起作废，必须重新登录
+    const adminId = adminLogin.data?.user?.id;
+    const selfReset = adminId
+      ? await asAdmin(`/api/admin/users/${adminId}/password`, { method: 'POST', body: { password: ADMIN_PASSWORD } })
+      : { status: 0, data: null };
+    check(
+      'resetting your own password is flagged',
+      selfReset.status === 200 && selfReset.data?.resetSelf === true,
+      `status=${selfReset.status}`,
+    );
+    const afterSelfReset = await asAdmin('/api/session');
+    check('the self reset revokes the admin session', afterSelfReset.data?.user === null);
+  }
+  cookie = ownerSession;
+
   section('cleanup');
   const deletedDatabase = await call(`/api/databases/${databaseId}`, { method: 'DELETE' });
   check('delete table', deletedDatabase.data?.ok === true);

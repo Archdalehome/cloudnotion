@@ -1674,3 +1674,121 @@ textarea.input {
   }
 }
 
+/* ------------------------------------------------ 确认码 / 密码提示块 */
+
+/* 「确认码 / 新密码」这类需要用户抄下来的提示：浅黄底 + 等宽数字 */
+.hint-box {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #f0dca6;
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #6b4e12;
+}
+
+/* 6 位确认码输入框：等宽 + 拉开字距，方便逐位核对 */
+.code-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 6px;
+  text-align: center;
+}
+
+.code-echo {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+/* -------------------------------------------------------- 用户管理页 */
+
+.admin-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 28px;
+}
+
+.admin-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* 窄屏上让表格自己横向滚动，不要把整页撑宽 */
+.admin-table-wrap {
+  margin: 10px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.admin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-table th {
+  background: var(--bg-soft);
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.admin-table tbody tr:hover {
+  background: var(--bg-soft);
+}
+
+/* 用户列表里的圆形头像：用昵称 / 邮箱首字母顶上 */
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: #17509a;
+  font-weight: 700;
+}
+
+.small-avatar {
+  flex: 0 0 auto;
+}
+
+/* 小标签：「我」「管理员」 */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tag.accent {
+  border-color: #c9dcff;
+  background: var(--accent-soft);
+  color: #17509a;
+}
+
+

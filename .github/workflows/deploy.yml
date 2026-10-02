@@ -9,6 +9,13 @@
 #   CLOUDFLARE_API_TOKEN   必需。Cloudflare API 令牌
 #   CLOUDFLARE_ACCOUNT_ID  必需。Cloudflare 账户 ID
 #   D1_DATABASE_ID         可选。提供后会替换 wrangler.jsonc 里的占位 database_id
+#   RESEND_API_KEY         可选。Resend 发信密钥（注册确认码 / 重置密码通知邮件）
+#   RESEND_FROM_EMAIL      可选。发件人，默认 CloudNotion <onboarding@resend.dev>
+#   ADMIN_EMAIL            可选。超级管理员邮箱，登录时自动创建 / 提升该账号
+#   ADMIN_PASSWORD         可选。管理员首次创建时用的密码（8 位以上，含字母与数字）
+#
+# 「可选」的 4 个会在部署成功后由 `wrangler secret put` 写进 Worker（未配置就跳过）；
+# e2e job 里跑的本地库另用一个用完即弃的测试管理员（.dev.vars，见下方步骤）。
 #
 # 未配置 CLOUDFLARE_* 时部署步骤会被安全跳过（只跑校验），不会让流水线变红。
 # 详细配置步骤见 DEPLOY.md「GitHub Actions 自动部署」。
@@ -94,6 +101,15 @@ jobs:
 
       - name: 迁移本地 D1
         run: npm run db:migrate:local
+
+      - name: 写入本地测试用 .dev.vars（临时库的管理员账号 + 确认码回显白名单）
+        run: |
+          cat > .dev.vars <<'EOF'
+          # 只作用于 CI 里这个用完即弃的本地 D1；线上凭据一律走 wrangler secret
+          ADMIN_EMAIL=admin@example.com
+          ADMIN_PASSWORD=Smoke1admin
+          AUTH_ECHO_CODE_DOMAINS=example.com,example.org,example.net
+          EOF
 
       - name: 启动本地 Worker（--local，无需登录）
         run: |
@@ -232,6 +248,39 @@ jobs:
             echo "- 线上地址：${url:-见本次运行日志}"
             echo "- Commit：\`${GITHUB_SHA:0:7}\`"
             echo "- 冒烟测试（本地 e2e）：见上面 e2e job 的摘要"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 同步可选 Secrets（邮件 / 管理员）到 Worker
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          set -uo pipefail
+          put() {
+            local name="$1" value="${2:-}"
+            if [ -z "$value" ]; then
+              echo "- $name：仓库未配置该 Secret，跳过"
+              return 0
+            fi
+            if printf '%s' "$value" | npx wrangler secret put "$name" >>/tmp/secrets.log 2>&1; then
+              echo "- $name：已写入 Worker secret"
+            else
+              echo "::warning title=写入 Secret 失败::$name 未能写入（见上方日志；首次部署时 Worker 可能还不存在，重跑一次即可）"
+              tail -n 20 /tmp/secrets.log || true
+            fi
+          }
+          put RESEND_API_KEY "${RESEND_API_KEY:-}"
+          put RESEND_FROM_EMAIL "${RESEND_FROM_EMAIL:-}"
+          put ADMIN_EMAIL "${ADMIN_EMAIL:-}"
+          put ADMIN_PASSWORD "${ADMIN_PASSWORD:-}"
+          {
+            echo "### Worker 环境变量"
+            echo ""
+            echo "- 邮件发信：$([ -n "${RESEND_API_KEY:-}" ] && echo '已配置（真实发信）' || echo '未配置（确认码回显，仅适合测试）')"
+            echo "- 超级管理员：$([ -n "${ADMIN_EMAIL:-}" ] && echo '已配置' || echo '未配置（用户管理页面无法访问）')"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 线上冒烟测试（对部署后的真实地址跑完整断言）

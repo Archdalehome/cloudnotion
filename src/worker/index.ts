@@ -7,6 +7,7 @@
  */
 import { getCurrentUser, purgeExpiredSessions } from './auth';
 import { errorToResponse, json } from './http';
+import { adminRoutes } from './routes/admin';
 import { authRoutes } from './routes/auth';
 import { databaseRoutes } from './routes/databases';
 import { fileRoutes } from './routes/files';
@@ -19,6 +20,7 @@ import type { Env, RequestContext, Route, RouteHandler } from './types';
 
 const API_ROUTES: Route[] = [
   ...authRoutes,
+  ...adminRoutes,
   ...databaseRoutes,
   ...propertyRoutes,
   ...recordRoutes,

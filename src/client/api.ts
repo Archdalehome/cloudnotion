@@ -3,6 +3,8 @@
  * Session handling relies on the HttpOnly cookie, hence `credentials: 'same-origin'`.
  */
 import type {
+  AdminPasswordResetResponse,
+  AdminUserListResponse,
   CellEditLocks,
   DatabaseChanges,
   DatabaseDetail,
@@ -13,6 +15,7 @@ import type {
   PropertyConfig,
   PublicDatabaseResponse,
   RecordNote,
+  RegistrationPending,
   RowRecord,
   RowValues,
   SessionUser,
@@ -107,10 +110,38 @@ const json = <T,>(path: string, method: string, body?: unknown, signal?: AbortSi
 
 export const api = {
   session: (signal?: AbortSignal) => json<SessionPayload>('/api/session', 'GET', undefined, signal),
+  /** 注册第一步：只登记待确认的注册并发确认码，账号要等 `verifyRegistration` 之后才存在 */
   register: (body: { email: string; password: string; name: string }) =>
-    json<{ user: SessionUser }>('/api/auth/register', 'POST', body),
+    json<RegistrationPending>('/api/auth/register', 'POST', body),
+  /** 注册第二步：填确认码，成功即返回已登录用户 */
+  verifyRegistration: (body: { email: string; code: string }) =>
+    json<{ user: SessionUser; emailVerified: true }>('/api/auth/register/verify', 'POST', body),
+  /** 重新发送注册确认码（同一邮箱 60 秒一次） */
+  resendRegistrationCode: (body: { email: string }) =>
+    json<RegistrationPending>('/api/auth/register/resend', 'POST', body),
   login: (body: { email: string; password: string }) => json<{ user: SessionUser }>('/api/auth/login', 'POST', body),
   logout: () => json<{ ok: true }>('/api/auth/logout', 'POST'),
+  /** 登录后自助改密码（其它设备的会话会立即失效） */
+  changePassword: (body: { currentPassword: string; newPassword: string }) =>
+    json<{ ok: true; sessionsRevoked: boolean }>('/api/auth/password', 'POST', body),
+
+  /* -------------------------------------------------------------- 管理后台 */
+  adminListUsers: (params?: { search?: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.limit !== undefined) query.set('limit', String(params.limit));
+    if (params?.offset !== undefined) query.set('offset', String(params.offset));
+    const suffix = query.toString() ? `?${query}` : '';
+    return json<AdminUserListResponse>(`/api/admin/users${suffix}`, 'GET');
+  },
+  adminUpdateUser: (id: string, body: { name?: string; email?: string }) =>
+    json<{ user: AdminUserListResponse['users'][number]; updatedSelf: boolean }>(
+      `/api/admin/users/${encodeURIComponent(id)}`,
+      'PATCH',
+      body,
+    ),
+  adminResetUserPassword: (id: string, body: { password?: string } = {}) =>
+    json<AdminPasswordResetResponse>(`/api/admin/users/${encodeURIComponent(id)}/password`, 'POST', body),
 
   listDatabases: () => json<{ databases: DatabaseSummary[] }>('/api/databases', 'GET'),
   createDatabase: (body: { name: string; icon?: string; description?: string; templateId?: string }) =>

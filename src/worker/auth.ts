@@ -117,7 +117,7 @@ export async function getCurrentUser(request: Request, env: Env): Promise<Authed
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const row = await env.DB.prepare(
-    `SELECT s.id AS session_id, s.expires_at, u.id, u.email, u.name
+    `SELECT s.id AS session_id, s.expires_at, u.id, u.email, u.name, u.is_admin
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ?`,
   )
@@ -133,12 +133,20 @@ export async function getCurrentUser(request: Request, env: Env): Promise<Authed
     id: sqlString(row, 'id'),
     email: sqlString(row, 'email'),
     name: sqlString(row, 'name'),
+    isAdmin: sqlNumber(row, 'is_admin') === 1,
   };
 }
 
 export async function requireUser(request: Request, env: Env): Promise<AuthedUser> {
   const user = await getCurrentUser(request, env);
   if (!user) throw unauthorized();
+  return user;
+}
+
+/** 管理员才有权限的接口（`users.is_admin = 1`）。 */
+export async function requireAdmin(request: Request, env: Env): Promise<AuthedUser> {
+  const user = await requireUser(request, env);
+  if (!user.isAdmin) throw forbidden('只有管理员可以访问用户管理');
   return user;
 }
 
@@ -166,6 +174,12 @@ export function sessionCookie(token: string, secure = true): string {
 
 export function clearedSessionCookie(secure = true): string {
   return serializeCookie(SESSION_COOKIE, '', { maxAge: 0, httpOnly: true, secure, sameSite: 'Lax' });
+}
+
+/** 当前请求的会话令牌哈希（改密码时用来「保留自己、踢掉其它设备」）。 */
+export async function currentSessionHash(request: Request): Promise<string | null> {
+  const token = getCookie(request, SESSION_COOKIE);
+  return token ? sha256Hex(token) : null;
 }
 
 /* ---------------------------------------------------------------- helpers */

@@ -45,6 +45,16 @@
     "APP_NAME": "CloudNotion",
     "MAX_UPLOAD_MB": "25",
     // set to "false" to close public registration
-    "ALLOW_SIGNUP": "true"
+    "ALLOW_SIGNUP": "true",
+    // 注册确认码（邮箱验证）的有效期，分钟
+    "AUTH_CODE_TTL_MINUTES": "15",
+    // 收件人域命中这份白名单时，确认码不走邮件服务，而是直接放在接口响应里（devCode）。
+    // 这些都是永远收不到邮件的保留测试域，所以「回显」不会削弱真实邮箱的验证强度，
+    // 却能让本地开发与 CI 冒烟测试自动走完注册流程。多个域名用逗号分隔。
+    // 另外：只要没配 RESEND_API_KEY，任何邮箱都走回显。
+    "AUTH_ECHO_CODE_DOMAINS": "example.com,example.org,example.net"
+    // 超级管理员（ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_RESET_PASSWORD）属于机密，
+    // 不写在这里：线上用 `npx wrangler secret put ADMIN_EMAIL`（或仓库 Secrets，
+    // 工作流会自动 sync 到 Worker），本地开发放 .dev.vars。见 DEPLOY.md 6.6。
   }
 }

@@ -409,7 +409,64 @@ export interface SessionUser {
   id: string;
   email: string;
   name: string;
+  /** 管理员（超级用户）：客户端据此显示「用户管理」入口 */
+  isAdmin: boolean;
 }
+
+/**
+ * 注册第一步（`POST /api/auth/register`）的响应：账号还没建好，等用户填确认码。
+ * `devCode` 只在「邮件服务未配置」或「收件人是保留测试域」时出现，方便本地开发 / 自动化测试。
+ */
+export interface RegistrationPending {
+  pending: true;
+  email: string;
+  /** 确认码有效期（分钟） */
+  ttlMinutes: number;
+  /** 距离过期还有多少秒 */
+  expiresInSeconds: number;
+  /** 是否真的把确认码发出去了 */
+  emailDelivered: boolean;
+  /** 仅在没发信时返回：把确认码直接回显出来 */
+  devCode?: string;
+}
+
+/** 管理员用户列表里的一行（GET /api/admin/users）。 */
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** 自己拥有的表格数 */
+  databaseCount: number;
+  /** 被邀请协作的表格数 */
+  sharedCount: number;
+  /** 最近一次会话时间（从没登录过则为 null） */
+  lastSeenAt: number | null;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUser[];
+  total: number;
+  limit: number;
+  offset: number;
+  search: string;
+}
+
+/** 管理员重置密码的响应：`password` 是新的（临时）密码，直接展示给管理员。 */
+export interface AdminPasswordResetResponse {
+  ok: true;
+  user: { id: string; email: string; name: string };
+  password: string;
+  /** 是否已经把新密码邮件发给了用户 */
+  emailed: boolean;
+  /** 该用户的所有会话是否已被清理 */
+  sessionsRevoked: boolean;
+  /** 重置的是不是管理员自己的账号（自己的会话也会失效，需要重新登录） */
+  resetSelf: boolean;
+}
+
 
 /* -------------------------------------------------------------- transport */
 

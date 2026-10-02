@@ -5,7 +5,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DatabaseDetail, DatabaseSummary, InboxMessage, InboxResponse, SessionUser } from '../shared/types';
 import { ApiError, api, type SessionPayload } from './api';
+import { AdminPanel } from './components/AdminPanel';
 import { AuthPage } from './components/AuthPage';
+import { ChangePasswordDialog } from './components/ChangePasswordDialog';
 import { DatabasePage } from './components/DatabasePage';
 import { InboxButton } from './components/InboxButton';
 import { PublicPage } from './components/PublicPage';
@@ -94,6 +96,10 @@ export function App() {
   const [inbox, setInbox] = useState<InboxResponse>(EMPTY_INBOX);
   /** 点开私信后要打开的记录 / 备注；由 DatabasePage 消费后清空 */
   const [inboxTarget, setInboxTarget] = useState<InboxTarget | null>(null);
+  /** 主区域是否停在「用户管理」页（只有管理员进得去，服务端另有校验） */
+  const [adminView, setAdminView] = useState(false);
+  /** 「修改密码」弹窗 */
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const toast = useCallback((message: string, kind: 'info' | 'error' = 'info') => {
     const id = Date.now() + Math.random();
@@ -168,6 +174,11 @@ export function App() {
       cancelled = true;
     };
   }, [shareToken, bootstrapSession]);
+
+  /** 不是管理员（或退出登录）时，把主区域从「用户管理」收回来 */
+  useEffect(() => {
+    if (!user?.isAdmin) setAdminView(false);
+  }, [user]);
 
   useEffect(() => {
     if (!activeId) {
@@ -292,6 +303,8 @@ export function App() {
     setDetailError('');
     setInbox(EMPTY_INBOX);
     setInboxTarget(null);
+    setAdminView(false);
+    setChangingPassword(false);
   }, []);
 
   const reauthenticate = useCallback(
@@ -335,12 +348,21 @@ export function App() {
         narrow={narrow}
         onSelect={(id) => {
           setActiveId(id);
+          // 从「用户管理」切回表格
+          setAdminView(false);
           // 手机上选完表格就收起抽屉，把屏幕还给表格
           if (narrow) setSidebarOpen(false);
         }}
         onCreate={createDatabase}
         onClose={() => setSidebar(false)}
         onLogout={() => void logout()}
+        onChangePassword={() => setChangingPassword(true)}
+        adminView={adminView}
+        onOpenAdmin={() => {
+          setAdminView(true);
+          // 手机上点完就收起抽屉，把屏幕让给用户列表
+          if (narrow) setSidebarOpen(false);
+        }}
         onInboxRefresh={() => void refreshInbox()}
         onInboxSelect={(message) => void openInboxMessage(message)}
       />
@@ -374,16 +396,34 @@ export function App() {
             ) : null}
             {narrow && detail ? <span className="muted small db-hint">{detail.name}</span> : null}
             <span className="spacer" />
-            {/* 侧边栏收起时侧边栏底部看不见了，把「用户名 · 邮箱 · 退出」挪到右上角 */}
+            {/* 侧边栏收起时看不到侧边栏里的「用户管理」入口，这里补一个 */}
+            {!sidebarOpen && user.isAdmin ? (
+              <button
+                type="button"
+                className="icon-btn"
+                title="用户管理"
+                aria-label="用户管理"
+                onClick={() => setAdminView((prev) => !prev)}
+              >
+                ⚙️
+              </button>
+            ) : null}
+            {/* 侧边栏收起时侧边栏底部看不见了，把「用户名 · 邮箱 · 改密码 · 退出」挪到右上角 */}
             {!sidebarOpen ? (
               <div className="row gap app-bar-user">
-                <UserChip user={user} onLogout={() => void logout()} />
+                <UserChip
+                  user={user}
+                  onLogout={() => void logout()}
+                  onChangePassword={() => setChangingPassword(true)}
+                />
               </div>
             ) : null}
           </div>
         ) : null}
 
-        {detail ? (
+        {adminView ? (
+          <AdminPanel me={user} onToast={toast} onReloadSession={() => void bootstrapSession()} />
+        ) : detail ? (
           <DatabasePage
             key={detail.id}
             database={detail}
@@ -442,6 +482,10 @@ export function App() {
           </div>
         )}
       </main>
+
+      {changingPassword ? (
+        <ChangePasswordDialog onClose={() => setChangingPassword(false)} onToast={toast} />
+      ) : null}
 
       {toasts.length ? (
         <div className="toasts">

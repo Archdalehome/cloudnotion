@@ -12,7 +12,8 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希）；用户名 / 邮箱 / 退出平时在侧边栏底部，侧边栏收起（手机端抽屉关闭）时挪到右上角顶部条 |
+| 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希）；**注册分两步**：先发 6 位邮箱确认码（`POST /api/auth/register` 返回 202 + `codeTtl`），验证码通过才写入 `users`，所以**没确认过的邮箱不会占号**；登录后在侧边栏底部「改密码」凭当前密码自行修改（作废其他设备的会话、当前设备保留）；用户名 / 邮箱 / 退出平时在侧边栏底部，侧边栏收起（手机端抽屉关闭）时挪到右上角顶部条 |
+| 用户管理 | 仅供 `ADMIN_EMAIL` 指定的超级管理员（首次登录自动创建 / 提升，见 [DEPLOY.md 6.6](./DEPLOY.md)）：侧边栏底部的「用户管理」面板支持按邮箱 / 昵称搜索 + 分页，显示建表数 / 协作者数 / 最近活跃时间，可改昵称与邮箱，也可一键重置密码（新密码邮件通知本人并作废其全部会话；重置自己时连当前会话一起失效，需重新登录） |
 | 表格 | 多表格（Database）管理、图标/描述、**新建即空白表格**（只有「名称」字段，弹窗里不再让用户挑模板）、软删除归档 |
 | 字段 | 16 种字段类型（文本/数字/单选/多选/状态/日期/勾选/链接/邮箱/电话/附件/创建时间/更新时间/创建人/更新人），可重命名、改宽、拖动排序、类型转换时清洗数据；表头 `▾` 菜单支持「编辑 / 升序 / 降序 / 添加筛选 / 在右侧插入 / ← → 左右移动该列 / 隐藏字段 / 锁定字段 / 删除字段」；**升序 / 降序是单键排序**：视图里只保留一条排序规则，对某个字段升 / 降序会自动取消其他字段的排序，当前排序字段在表头显示 ↑ / ↓；表格末尾不再显示「＋ 字段」列，新增字段统一走表头 `▾` 菜单的「＋ 在右侧插入」 |
 | 记录 | 新建/编辑/删除、批量创建、批量删除、复制记录、分页（`limit`/`offset`，**滚动到底自动加载下一页**：表格 / 看板 / 画廊三种视图通用，原来表格右上角的「加载更多」按钮已移除）、乐观更新 + 失败回滚；行末的「复制记录 / 删除记录」操作列已移除，复制 / 删除统一走**批量操作栏（已选 N 条 / 复制 / 删除 / 取消选择）**，它显示在「＋ 新建筛选」后面的视图工具栏里；行首的方框列不再吸边，跟着表格一起左右滚动 |
@@ -33,16 +34,20 @@ src/
     index.ts   入口：路由分发、错误处理、静态资源
     http.ts    json/readJson/参数校验/错误构造等工具
     auth.ts    Cookie 会话、密码哈希、requireUser
+    admin.ts   超级管理员引导（ADMIN_EMAIL / ADMIN_PASSWORD）+ 用户列表查询
+    email.ts   Resend 发信（没配 RESEND_API_KEY / 发信失败都只记日志，不阻断流程）
+    emailCodes.ts 注册邮箱确认码：发码（15 分钟有效、60 秒重发节流）、校验、清过期
     access.ts  表格访问级别判定（view/edit/manage）
     changes.ts 多人协作的增量同步：改动日志（database_changes）+「自某个版本号起的改动」查询
     mappers.ts D1 行 -> API 类型
-    routes/    auth / databases / properties / records / views / public / files / notes
+    routes/    auth / admin / databases / properties / records / views / public / files / notes
   client/     React SPA
     App.tsx            会话 + 表格列表 + `/share/:token` 路由
     api.ts             fetch 封装（cookie、ApiError、typed 响应）
     components/        AuthPage Sidebar DatabasePage PublicPage TableGrid CardViews
                        Cell RecordDialog PropertyDialog ViewBar SharePanel Modal Popover
-                       InboxButton UserChip FilterPanel
+                       InboxButton UserChip FilterPanel ChangePasswordDialog
+                       AdminPanel ResetResultCard EditUserDialog
     lib/viewEngine.ts  前端筛选/排序/分组计算
     lib/time.ts        相对时间 / 精确时间的格式化
     lib/cellEditLocks.ts  单元格「限制编辑」的 10 秒计时窗口（判定 / 倒计时 / 到点自动只读）
@@ -54,6 +59,7 @@ migrations/
   ...               0002-0005：视图定向分享 / 字段锁定 / 分享限制编辑等增量迁移
   0006_notes.sql    记录备注（notes）+ @提醒私信（note_mentions）
   0007_database_changes.sql  多人协作增量同步的改动日志（database_changes，rev 全局自增）
+  0008_admin_and_email_codes.sql  超级管理员标记（users.is_admin）+ 注册邮箱确认码（email_codes）
 ```
 
 ## 快速开始
@@ -64,14 +70,20 @@ npm install
 # 1. 本地 D1 建表（会写入 .wrangler/state，本地开发不需要真实 database_id）
 npm run db:migrate:local
 
-# 2. 构建前端 + 启动 Worker（http://127.0.0.1:8787）
+# 2.（可选）本地机密：Resend 发信密钥、超级管理员账号等。不配也能跑：
+#    没配 RESEND_API_KEY 时确认码直接回显在接口响应里（devCode，仅测试域）
+cp .dev.vars.example .dev.vars        # Windows PowerShell：Copy-Item .dev.vars.example .dev.vars
+
+# 3. 构建前端 + 启动 Worker（http://127.0.0.1:8787）
 npm run dev
 ```
 
 - `npm run dev:web`：只跑 Vite 前端（`/api` 需代理到 Worker，见 `vite.config.ts`）
 - `npm run typecheck`：`tsconfig.client.json` + `tsconfig.worker.json` 全量类型检查
-- `npm run check:routes`：路由自检（当前 43 条路由）
+- `npm run check:routes`：路由自检（当前 49 条路由）
 - `npm run test:e2e`：对运行中的 Worker 跑端到端冒烟测试
+- `.dev.vars`：本地机密（`RESEND_API_KEY`、`ADMIN_EMAIL` / `ADMIN_PASSWORD`），已在 `.gitignore` 里；
+  模板见 `.dev.vars.example`，线上用 `npx wrangler secret put`（详见 [DEPLOY.md 6.6](./DEPLOY.md)）
 
 ```bash
 # 端到端验证（另开一个终端，先 npm run dev）
@@ -79,11 +91,13 @@ node scripts/smoke-test.mjs
 BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 ```
 
-冒烟测试覆盖：健康检查 → 注册/会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删（含表级锁定参数被忽略的回归断言）→ 分享链接（只读拒写、可编辑可写、**限制编辑的 10 秒计时窗口**：窗口内同一格可以反复改（不限次数）、窗口内清空即视为没输入过（之后可重新输入）、窗口一过即拒写并列入 `lockedCells`）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读、所有者 ↔ 定向分享访客互相 @、单条记录同步接口）→ **多人协作增量同步**（版本号游标、新行/改单元格/新备注/删行各自进增量、空增量、结构改动返回 reset）→ R2 上传下载 → 清理。
+冒烟测试覆盖：健康检查 → **两步注册**（确认码 TTL / 测试域回显 / 60 秒重发节流 / 错误码 / 已用码不能重放 / 未确认邮箱不能登录）/ 会话 → 建表建字段 → 记录增删改查/批量/复制 → 视图增改删（含表级锁定参数被忽略的回归断言）→ 分享链接（只读拒写、可编辑可写、**限制编辑的 10 秒计时窗口**：窗口内同一格可以反复改（不限次数）、窗口内清空即视为没输入过（之后可重新输入）、窗口一过即拒写并列入 `lockedCells`）→ 成员邀请/改权/移除/所有者保护 → 备注 + @提醒私信（收件箱未读/已读、所有者 ↔ 定向分享访客互相 @、单条记录同步接口）→ **多人协作增量同步**（版本号游标、新行/改单元格/新备注/删行各自进增量、空增量、结构改动返回 reset）→ R2 上传下载 → **改密码**（当前密码必须正确、新旧不得相同、强度校验、其他设备被下线、当前设备保留、旧密码失效）→ **用户管理**（匿名 401 / 非管理员 403、按邮箱搜索、计数器与最近活跃、改昵称与邮箱、邮箱冲突 409、未知用户 404、重置他人密码 + 对方会话作废 + 临时密码可登录、重置自己后当前会话失效）→ 清理。共 **199 项断言**。
 
 ## 数据模型
 
-- `users` / `sessions`：账号与会话（`sessions.token_hash` 唯一）
+- `users` / `sessions`：账号与会话（`sessions.token_hash` 唯一）；`users.is_admin = 1` = 超级管理员（由 `ADMIN_EMAIL` 引导写入），`sessions.last_seen_at` 供用户管理列表显示「最近活跃」
+- `email_codes`：注册邮箱确认码（`email` + 6 位 `code_hash`、`expires_at`、`consumed_at`、`attempts`、`sent_at` = 60 秒重发节流）。
+  只存哈希：确认过的码不能重放；验证通过前**不会**写 `users`，所以未确认的邮箱不占号
 - `databases`：一张表格；`database_members`：受邀协作者（`role` = editor/viewer）
 - `properties`：字段定义（`type` + `config` JSON + `position` REAL 排序 + `is_locked` 字段级锁定）
 - `records`：一行记录，`"values"` 字段存 `{ 字段id: 值 }` JSON 文本，`position` REAL 排序
@@ -105,7 +119,11 @@ BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 ## API 一览
 
 ```
-POST   /api/auth/register | /api/auth/login | /api/auth/logout
+POST   /api/auth/register                 （发 6 位邮箱确认码 → 202 + codeTtl）
+POST   /api/auth/register/verify          （校验确认码 → 建号并登录）
+POST   /api/auth/register/resend          （重发确认码，60 秒节流）
+POST   /api/auth/login | /api/auth/logout
+POST   /api/auth/password                 （登录后改密码：其他设备下线、当前设备保留）
 GET    /api/session
 GET    /api/databases              POST /api/databases
 GET|PATCH|DELETE /api/databases/:id
@@ -131,6 +149,9 @@ GET    /api/public/:token
 GET    /api/public/:token/changes          （公开链接页的增量同步，同一套逻辑）
 POST   /api/public/:token/records
 PATCH|DELETE /api/public/:token/records/:recordId
+GET    /api/admin/users                    （超级管理员：用户列表 ?search=&limit=&offset=）
+PATCH  /api/admin/users/:id                （改昵称 / 邮箱，邮箱冲突 409）
+POST   /api/admin/users/:id/password       （重置密码：邮件通知 + 作废对方会话）
 GET    /api/health
 ```
 
@@ -144,8 +165,8 @@ GET    /api/health
 
 ```
 verify   npm ci -> npm run typecheck -> npm run check:routes -> vite build
-e2e      本地 D1 迁移 -> wrangler dev --local -> scripts/smoke-test.mjs（153 项断言）
-deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 线上 153 项冒烟测试
+e2e      本地 D1 迁移 -> 写临时 .dev.vars（测试管理员 + 回显白名单）-> wrangler dev --local -> scripts/smoke-test.mjs（199 项断言）
+deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 同步可选 Secrets（邮件 / 管理员）-> 线上 199 项冒烟测试
 ```
 
 只需在仓库 `Settings → Secrets and variables → Actions` 配置：
@@ -155,5 +176,11 @@ deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wran
 | `CLOUDFLARE_API_TOKEN` | ✅ | API 令牌（Workers Scripts / D1 / R2 编辑权限） |
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | Cloudflare 账户 ID |
 | `D1_DATABASE_ID` | ➖ | 可选，填了会自动替换 `wrangler.jsonc` 中的占位 `database_id` |
+| `RESEND_API_KEY` | ➖ | Resend 发信密钥（注册确认码 / 重置密码通知）。不配时确认码直接回显为 `devCode`，只适合测试域 |
+| `RESEND_FROM_EMAIL` | ➖ | 发件人，默认 `CloudNotion <onboarding@resend.dev>` |
+| `ADMIN_EMAIL` | ➖ | 超级管理员邮箱：首次登录（或 `GET /api/session`）自动创建 / 提升该账号 |
+| `ADMIN_PASSWORD` | ➖ | 管理员首次创建时用的密码（8 位以上、含字母与数字）；配上 `ADMIN_RESET_PASSWORD=true` 还能覆盖已有密码 |
+
+后面 4 个「可选」Secret 会在部署成功后由工作流用 `wrangler secret put` 写入 Worker（未配置就跳过）；本地开发把它们放进 `.dev.vars`（模板 `.dev.vars.example`）。完整说明见 [DEPLOY.md 6.6](./DEPLOY.md)。
 
 未配置 `CLOUDFLARE_*` 时会安全跳过部署并给出 warning；详细步骤与权限清单见 [DEPLOY.md 第 6 节](./DEPLOY.md)。

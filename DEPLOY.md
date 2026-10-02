@@ -61,24 +61,36 @@ npm run deploy                 # vite build && wrangler deploy
 | `APP_NAME` | `CloudNotion` | 前端标题 / 健康检查返回的名称 |
 | `MAX_UPLOAD_MB` | `25` | 单文件上传上限（MB） |
 | `ALLOW_SIGNUP` | `true` | 设为 `"false"` 关闭公开注册（已有账号仍可登录） |
+| `AUTH_CODE_TTL_MINUTES` | `15` | 注册邮箱确认码有效期（分钟） |
+| `AUTH_ECHO_CODE_DOMAINS` | `example.com,example.org,example.net` | 收件人域命中白名单时确认码**不发信**、直接回显在响应里（`devCode`）。这些都是永远收不到邮件的保留测试域，所以不会削弱真实邮箱的验证强度；另外只要没配 `RESEND_API_KEY`，任何邮箱都回显 |
+
+> 机密（`RESEND_API_KEY` / `RESEND_FROM_EMAIL` / `ADMIN_EMAIL` / `ADMIN_PASSWORD`）**不要**写进 `vars`，
+> 见第 6.6 节。
 
 ## 5. 部署后验证
 
 ```bash
-# 冒烟测试（45 项断言，覆盖注册/建表/记录/视图/分享/成员/附件）
+# 冒烟测试（199 项断言，覆盖两步注册/登录/建表/记录/视图/分享/成员/附件/改密码/用户管理）
 BASE_URL=https://cloudnotion.<your-subdomain>.workers.dev node scripts/smoke-test.mjs
 
 # 路由自检
 npm run check:routes
 ```
 
+> 线上跑冒烟测试前，建议先在 Worker 上配好 `ADMIN_EMAIL` + `ADMIN_PASSWORD`（第 6.6 节）：
+> 配了就会连「用户管理」一起测；没配时这一段会自动 `skip`（其余断言照跑）。
+> 另外注册/重置密码时只有**保留测试域**（`AUTH_ECHO_CODE_DOMAINS`）才会回显确认码，
+> 所以线上跑测试要么用 `@example.com` 这类测试邮箱，要么把测试域加到白名单。
+
 浏览器检查：
 
-1. `/` 打开后注册账号，应自动创建一张入门表格
+1. `/` 打开后注册账号：填邮箱 → 「发送确认码」→ 输入 6 位码 → 设密码，应自动创建一张入门表格
 2. 建表 → 加字段 → 加记录 → 切换表格/看板/画廊视图并设置筛选、排序、分组
 3. 视图工具栏点「分享」→ 面板里只保留「视图定向分享」：填一个已注册邮箱并选视图 / 权限，对方登录后只能看到被分享的那一个视图（公开链接 `/share/<token>` 接口未改动，生成入口已从界面移除，由冒烟测试覆盖）
 4. 上传一个附件字段文件，刷新后仍可下载（验证 R2 绑定）
 5. 收起侧边栏（宽屏点侧边栏头部 `«`，手机端点顶部条 ☰ 关掉抽屉）后，页面右上角顶部条应显示当前账号的用户名 / 邮箱与「退出」，点「退出」回到登录页
+6. 侧边栏底部的「改密码」：填当前密码 + 新密码 → 成功后其他设备的会话立即失效，本机继续可用
+7. 用 `ADMIN_EMAIL` 登录后，侧边栏底部会多出「用户管理」：搜一个已注册邮箱 → 改昵称 / 邮箱 → 「重置密码」应弹出新密码（配了 Resend 时同一份密码也会发到对方邮箱）
 
 ## 6. GitHub Actions 自动部署（CI/CD）
 
@@ -99,6 +111,14 @@ npm run check:routes
 | `CLOUDFLARE_API_TOKEN` | ✅ | Cloudflare API 令牌，权限见下 |
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | `npx wrangler whoami` 里的 Account ID |
 | `D1_DATABASE_ID` | ➖ | 可选。填了就不必把真实 id 提交进 `wrangler.jsonc`，工作流会自动替换占位符 |
+| `RESEND_API_KEY` | ➖ | Resend 发信密钥（注册确认码、重置密码通知）。不配则确认码回显，仅适合测试 |
+| `RESEND_FROM_EMAIL` | ➖ | 发件人，默认 `CloudNotion <onboarding@resend.dev>` |
+| `ADMIN_EMAIL` | ➖ | 超级管理员邮箱，登录时自动创建 / 提升该账号 |
+| `ADMIN_PASSWORD` | ➖ | 管理员首次创建时用的密码（8 位以上、含字母与数字） |
+
+后 4 个可选 Secret 会在 `deploy` 阶段（部署成功之后）由 `wrangler secret put` 自动写入 Worker，未配置就跳过；
+`e2e` 阶段用的是另一套**用完即弃**的本地 `.dev.vars`（`admin@example.com` + 确认码回显白名单），
+不会影响线上账号。手动配置与本地开发见 [6.6 邮件（Resend）与超级管理员](#66-邮件resend与超级管理员)。
 
 创建 Token：Cloudflare 控制台 → My Profile → API Tokens → Create Token → 选「Edit Cloudflare Workers」模板，并确保含：
 
@@ -144,9 +164,55 @@ Actions → Deploy → Run workflow，可勾选：
 npm ci
 npm run typecheck ; npm run check:routes ; npm run build:client
 npm run db:migrate:local
+cp .dev.vars.example .dev.vars          # 本地管理员账号 + 测试域回显白名单（冒烟测试要用）
 npx wrangler dev --port 8787 --local    # 另开一个终端保持运行
-node scripts/smoke-test.mjs             # 期望 45/45 checks passed
+node scripts/smoke-test.mjs             # 期望 199/199 checks passed
 ```
+
+### 6.6 邮件（Resend）与超级管理员
+
+这两件事都有默认行为，**不配置也能正常跑**：
+
+| 配置项 | 不配置时的行为 |
+| --- | --- |
+| `RESEND_API_KEY` | 不发真邮件：注册确认码直接回显在 `POST /api/auth/register` 的响应里（`devCode`），仅本地 / 测试域可用 |
+| `ADMIN_EMAIL` + `ADMIN_PASSWORD` | 没有超级管理员：`/api/admin/*` 一律 403，界面里也不会出现「用户管理」 |
+
+#### 线上（Worker secret）
+
+```bash
+npx wrangler secret put RESEND_API_KEY     # 粘贴 re_... 开头的密钥
+npx wrangler secret put RESEND_FROM_EMAIL  # 例：CloudNotion <noreply@yourdomain.com>
+npx wrangler secret put ADMIN_EMAIL        # 例：you@yourdomain.com
+npx wrangler secret put ADMIN_PASSWORD     # 8 位以上、含字母与数字
+npx wrangler secret list                   # 确认写入结果
+```
+
+也可以只配置 GitHub 仓库的同名 Secrets：`deploy` 阶段部署成功后会由工作流自动 `wrangler secret put`（见 6.1）。
+
+#### Resend 注意事项
+
+- 在 Resend 后台创建 API Key；`RESEND_FROM_EMAIL` 用默认的 `onboarding@resend.dev` 时**只能发到 Resend 账号本人的邮箱**，要发给别人必须先在 Resend 验证自己的域名
+- 没配 `RESEND_API_KEY`（或调用失败）只写日志，不会让注册 / 重置接口失败，响应里 `emailed: false`
+- 确认码默认 15 分钟有效（`AUTH_CODE_TTL_MINUTES`），同一邮箱 60 秒内只能重发一次（`429`）
+
+#### 超级管理员
+
+- 第一次用 `ADMIN_EMAIL` 登录（或已登录时访问 `GET /api/session`）会自动创建该账号，密码取 `ADMIN_PASSWORD`；账号已存在则**只提升**为管理员，不会改密码
+- 忘记密码：临时把 `ADMIN_RESET_PASSWORD` 设为 `true`，再登录一次即用 `ADMIN_PASSWORD` 覆盖，改完记得删掉这个变量
+- 管理员能力：用户列表（搜索 + 建表数 / 协作者数 / 最近活跃）、改昵称与邮箱、重置密码（新密码邮件通知本人并作废其全部会话；重置自己时连当前会话一起失效，需重新登录）
+- 管理员**看不到**别人的表格内容，也没有删除用户的接口——只能管理账号本身
+
+#### 本地开发
+
+```bash
+cp .dev.vars.example .dev.vars      # 模板在仓库根目录；.dev.vars 已 gitignore，切勿提交
+npm run dev
+```
+
+本地想联调真邮件就把 `RESEND_API_KEY` 填上；只想跑通流程就留空（确认码回显）。
+`AUTH_ECHO_CODE_DOMAINS` 里是永远收不到邮件的保留测试域，本地与 CI 冒烟测试都用
+`@example.com` 账号，因此能自动读回确认码完成注册。
 
 ## 7. 常见问题
 
@@ -157,6 +223,9 @@ node scripts/smoke-test.mjs             # 期望 45/45 checks passed
 | 上传报错 / 404 | R2 桶未创建或 `bucket_name` 不一致 |
 | `near "values": syntax error` | SQL 中把 `values` 当作列名未加引号；本仓库已统一写成 `"values"` |
 | 前端 404 / 空白 | 忘记 `vite build`：`npm run deploy` 会自动构建，勿只跑 `wrangler deploy` |
+| 注册收不到确认码 | ① 未配置 `RESEND_API_KEY`（此时只在响应里回显 `devCode`，测试域才能在界面上看到）；② 发件人用了 `onboarding@resend.dev` 但收件人不是 Resend 账号本人；③ 域名未在 Resend 验证。见 [6.6](#66-邮件resend与超级管理员) |
+| 登录后没有「用户管理」入口 | 未配置 `ADMIN_EMAIL`，或当前账号不是它；配置后需重新登录（见 [6.6](#66-邮件resend与超级管理员)） |
+| 重置自己的密码后被踢下线 | 预期行为：重置自己会作废自己全部会话（含当前），重新用新密码登录即可 |
 | 想回滚 | `npx wrangler rollback`（选择上一个版本，见 `npx wrangler deployments list`） |
 
 ## 8. 数据备份
