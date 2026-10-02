@@ -8,7 +8,7 @@ export interface Env {
   ALLOW_SIGNUP?: string;
   /** Resend API Key（secret，`npx wrangler secret put RESEND_API_KEY`）；不配则注册确认码直接回显 */
   RESEND_API_KEY?: string;
-  /** 发件人，例如 `CloudNotion <onboarding@resend.dev>`（用自备域名时改成自己的） */
+  /** 发件人，例如 `Qafield <onboarding@resend.dev>`（用自备域名时改成自己的） */
   RESEND_FROM_EMAIL?: string;
   /** 超级管理员的登录邮箱：登录时会被自动创建 / 提升为管理员 */
   ADMIN_EMAIL?: string;

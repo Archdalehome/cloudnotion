@@ -11,7 +11,7 @@
 # 本地开发与 CI 冒烟测试靠它自动跑完注册流程。
 RESEND_API_KEY=
 # 发件人。onboarding@resend.dev 只能发给 Resend 账号本人的邮箱；绑定自己的域名后再改。
-RESEND_FROM_EMAIL=CloudNotion <onboarding@resend.dev>
+RESEND_FROM_EMAIL=Qafield <onboarding@resend.dev>
 
 # 超级管理员：这两个值一配上，第一次登录（或 GET /api/session）就会自动创建 / 提升该账号
 ADMIN_EMAIL=admin@example.com

@@ -557,7 +557,7 @@ async function listHandler(ctx: RequestContext): Promise<Response> {
     databases,
     user,
     maxUploadMb: Number(ctx.env.MAX_UPLOAD_MB ?? 25),
-    appName: ctx.env.APP_NAME ?? 'CloudNotion',
+    appName: ctx.env.APP_NAME ?? 'Qafield',
   });
 }
 

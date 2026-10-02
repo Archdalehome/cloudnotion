@@ -1,6 +1,10 @@
-# CloudNotion
+# Qafield
 
 ![Deploy](https://github.com/Archdalehome/cloudnotion/actions/workflows/deploy.yml/badge.svg)
+
+> 站点名称（品牌）：**Qafield**（`wrangler.jsonc` → `vars.APP_NAME`，同时决定前端标题、注册/重置邮件标题与 `/api/health` 返回的 `app`）。
+> Cloudflare 侧的**基础设施标识仍沿用 `cloudnotion`**（Worker 名 `cloudnotion` → 线上地址 `cloudnotion.<subdomain>.workers.dev`、D1 库 `cloudnotion-db`、R2 桶 `cloudnotion-files`）：
+> 这些名字一旦变动就等于换线上地址 / 换库，数据不会自动跟着走，所以按品牌改名时保持不动。
 
 类 Notion 的灵活表格（Database）系统，全部跑在 **Cloudflare Workers + D1 + R2** 上：
 
@@ -177,7 +181,7 @@ deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wran
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | Cloudflare 账户 ID |
 | `D1_DATABASE_ID` | ➖ | 可选，填了会自动替换 `wrangler.jsonc` 中的占位 `database_id` |
 | `RESEND_API_KEY` | ➖ | Resend 发信密钥（注册确认码 / 重置密码通知）。不配时确认码直接回显为 `devCode`，只适合测试域 |
-| `RESEND_FROM_EMAIL` | ➖ | 发件人，默认 `CloudNotion <onboarding@resend.dev>` |
+| `RESEND_FROM_EMAIL` | ➖ | 发件人，默认 `Qafield <onboarding@resend.dev>` |
 | `ADMIN_EMAIL` | ➖ | 超级管理员邮箱：首次登录（或 `GET /api/session`）自动创建 / 提升该账号 |
 | `ADMIN_PASSWORD` | ➖ | 管理员首次创建时用的密码（8 位以上、含字母与数字）；配上 `ADMIN_RESET_PASSWORD=true` 还能覆盖已有密码 |
 

@@ -1,5 +1,5 @@
 /**
- * CloudNotion worker entry point.
+ * Qafield worker entry point.
  *
  * `/api/*` is handled here (see `run_worker_first` in wrangler.jsonc); every
  * other request falls through to the static asset store which serves the Vite
@@ -81,7 +81,7 @@ function withSecurityHeaders(response: Response, env: Env): Response {
   const headers = new Headers(response.headers);
   headers.set('x-content-type-options', 'nosniff');
   headers.set('referrer-policy', 'strict-origin-when-cross-origin');
-  headers.set('x-served-by', env.APP_NAME ?? 'CloudNotion');
+  headers.set('x-served-by', env.APP_NAME ?? 'Qafield');
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -93,7 +93,7 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   try {
     if (url.pathname === '/api/health') {
-      return json({ ok: true, app: env.APP_NAME ?? 'CloudNotion', time: Date.now() });
+      return json({ ok: true, app: env.APP_NAME ?? 'Qafield', time: Date.now() });
     }
 
     const { match, otherMethod } = matchRoute(request.method.toUpperCase(), url.pathname);

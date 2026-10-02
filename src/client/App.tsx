@@ -32,7 +32,7 @@ interface InboxTarget {
 }
 
 /** 侧边栏展开状态在本地记住（下次打开保持上次的选择） */
-const SIDEBAR_KEY = 'cloudnotion.sidebar-open';
+const SIDEBAR_KEY = 'qafield.sidebar-open';
 /** 窄屏断点，必须与 styles.css 里的媒体查询保持一致 */
 const NARROW_QUERY = '(max-width: 900px)';
 
@@ -81,7 +81,7 @@ function summaryOf(detail: DatabaseDetail): DatabaseSummary {
 export function App() {
   const shareToken = useMemo(shareTokenFromPath, []);
   const [booting, setBooting] = useState(!shareToken);
-  const [appName, setAppName] = useState('CloudNotion');
+  const [appName, setAppName] = useState('Qafield');
   const [user, setUser] = useState<SessionUser | null>(null);
   const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);

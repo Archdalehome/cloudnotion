@@ -230,7 +230,7 @@ async function sessionHandler(ctx: RequestContext): Promise<Response> {
       ...sessionResponse(null),
       databases: [],
       maxUploadMb: Number(ctx.env.MAX_UPLOAD_MB ?? 25),
-      appName: ctx.env.APP_NAME ?? 'CloudNotion',
+      appName: ctx.env.APP_NAME ?? 'Qafield',
     });
   }
   const databases = await listDatabases(ctx.env, user.id);
@@ -238,7 +238,7 @@ async function sessionHandler(ctx: RequestContext): Promise<Response> {
     ...sessionResponse(user),
     databases,
     maxUploadMb: Number(ctx.env.MAX_UPLOAD_MB ?? 25),
-    appName: ctx.env.APP_NAME ?? 'CloudNotion',
+    appName: ctx.env.APP_NAME ?? 'Qafield',
   });
 }
 

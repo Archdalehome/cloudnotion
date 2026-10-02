@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * End-to-end smoke test for CloudNotion.
+ * End-to-end smoke test for Qafield.
  *
  * Runs against a live Worker - either `npm run dev` / `npm run preview`
  * (http://127.0.0.1:8787) or a deployed URL:
  *
  *   node scripts/smoke-test.mjs
- *   BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
+ *   BASE_URL=https://qafield.example.workers.dev node scripts/smoke-test.mjs
  *
  * It registers throw-away accounts and walks the critical path: two-step
  * signup (email code) -> session -> create table -> add field -> records
@@ -151,7 +151,7 @@ function waitForGraceWindow() {
 }
 
 async function main() {
-  section(`CloudNotion smoke test -> ${BASE}`);
+  section(`Qafield smoke test -> ${BASE}`);
   const alive = await waitForServer();
   if (!check('worker reachable (/api/health)', alive)) {
     console.error('\nStart the worker first: npm run dev');
@@ -1619,7 +1619,7 @@ async function main() {
   // -------------------------------------------------------------------- files
   section('files');
   const form = new FormData();
-  form.set('file', new Blob(['cloudnotion smoke test'], { type: 'text/plain' }), 'smoke.txt');
+  form.set('file', new Blob(['qafield smoke test'], { type: 'text/plain' }), 'smoke.txt');
   form.set('databaseId', databaseId);
   const uploaded = await call('/api/files', { method: 'POST', form });
   const fileId = uploaded.data?.file?.id;
@@ -1628,7 +1628,7 @@ async function main() {
   if (fileId) {
     const download = await fetch(`${BASE}/api/files/${fileId}`, { headers: { cookie } });
     const text = await download.text();
-    check('download file', download.ok && text === 'cloudnotion smoke test', `status=${download.status}`);
+    check('download file', download.ok && text === 'qafield smoke test', `status=${download.status}`);
   }
 
   // ------------------------------------------------------------------ cleanup

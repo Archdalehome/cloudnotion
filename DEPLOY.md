@@ -58,7 +58,7 @@ npm run deploy                 # vite build && wrangler deploy
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `APP_NAME` | `CloudNotion` | 前端标题 / 健康检查返回的名称 |
+| `APP_NAME` | `Qafield` | 站点名称：前端标题 / 邮件标题 / 健康检查返回的名称 |
 | `MAX_UPLOAD_MB` | `25` | 单文件上传上限（MB） |
 | `ALLOW_SIGNUP` | `true` | 设为 `"false"` 关闭公开注册（已有账号仍可登录） |
 | `AUTH_CODE_TTL_MINUTES` | `15` | 注册邮箱确认码有效期（分钟） |
@@ -117,7 +117,7 @@ npm run check:routes
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | `npx wrangler whoami` 里的 Account ID |
 | `D1_DATABASE_ID` | ➖ | 可选。填了就不必把真实 id 提交进 `wrangler.jsonc`，工作流会自动替换占位符 |
 | `RESEND_API_KEY` | ➖ | Resend 发信密钥（注册确认码、重置密码通知）。不配则确认码回显，仅适合测试 |
-| `RESEND_FROM_EMAIL` | ➖ | 发件人，默认 `CloudNotion <onboarding@resend.dev>` |
+| `RESEND_FROM_EMAIL` | ➖ | 发件人，默认 `Qafield <onboarding@resend.dev>` |
 | `ADMIN_EMAIL` | ➖ | 超级管理员邮箱，登录时自动创建 / 提升该账号 |
 | `ADMIN_PASSWORD` | ➖ | 管理员首次创建时用的密码（8 位以上、含字母与数字） |
 
@@ -187,7 +187,7 @@ node scripts/smoke-test.mjs             # 期望 199/199 checks passed
 
 ```bash
 npx wrangler secret put RESEND_API_KEY     # 粘贴 re_... 开头的密钥
-npx wrangler secret put RESEND_FROM_EMAIL  # 例：CloudNotion <noreply@yourdomain.com>
+npx wrangler secret put RESEND_FROM_EMAIL  # 例：Qafield <noreply@yourdomain.com>
 npx wrangler secret put ADMIN_EMAIL        # 例：you@yourdomain.com
 npx wrangler secret put ADMIN_PASSWORD     # 8 位以上、含字母与数字
 npx wrangler secret list                   # 确认写入结果

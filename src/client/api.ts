@@ -1,5 +1,5 @@
 /**
- * Thin typed wrapper around the CloudNotion JSON API.
+ * Thin typed wrapper around the Qafield JSON API.
  * Session handling relies on the HttpOnly cookie, hence `credentials: 'same-origin'`.
  */
 import type {

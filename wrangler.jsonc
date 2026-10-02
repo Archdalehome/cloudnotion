@@ -23,6 +23,8 @@
   // Created in the Cloudflare dashboard as "cloudnotion-db".
   // CI runs `wrangler d1 migrations apply cloudnotion-db --remote`, which
   // resolves the database by name, so keep the name in sync with the console.
+  // 注意：数据库名属于基础设施标识，与站点品牌名（vars.APP_NAME）互不相关；
+  // 改品牌名不需要（也无法直接）重命名已建好的 D1 / R2 资源。
   "d1_databases": [
     {
       "binding": "DB",
@@ -42,7 +44,7 @@
   ],
 
   "vars": {
-    "APP_NAME": "CloudNotion",
+    "APP_NAME": "Qafield",
     "MAX_UPLOAD_MB": "25",
     // set to "false" to close public registration
     "ALLOW_SIGNUP": "true",

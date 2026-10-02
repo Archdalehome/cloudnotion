@@ -3,8 +3,8 @@
  *
  * 只需要一个 `RESEND_API_KEY`：`POST https://api.resend.com/emails`
  *   - secret 写入：`npx wrangler secret put RESEND_API_KEY`（本地开发放 `.dev.vars`）
- *   - 发件人：`RESEND_FROM_EMAIL`，默认 `CloudNotion <onboarding@resend.dev>`
- *     （用自备域名时改成自己的，例如 `CloudNotion <noreply@your-domain.com>`）
+ *   - 发件人：`RESEND_FROM_EMAIL`，默认 `Qafield <onboarding@resend.dev>`
+ *     （用自备域名时改成自己的，例如 `Qafield <noreply@your-domain.com>`）
  *
  * 两种「不发真邮件」的情形都不会抛错，而是返回 `{ ok: false, reason: 'not_configured' }`，
  * 由调用方把确认码直接回显在响应里，这样本地开发和自动化测试都能跑通完整注册流程：
@@ -16,7 +16,7 @@ import { badGateway } from './http';
 import type { Env } from './types';
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
-const DEFAULT_FROM = 'CloudNotion <onboarding@resend.dev>';
+const DEFAULT_FROM = 'Qafield <onboarding@resend.dev>';
 
 export type EmailResult =
   | { ok: true }
@@ -30,7 +30,7 @@ export interface EmailMessage {
 }
 
 function appName(env: Env): string {
-  return env.APP_NAME || 'CloudNotion';
+  return env.APP_NAME || 'Qafield';
 }
 
 function escapeHtml(text: string): string {
