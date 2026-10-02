@@ -98,8 +98,8 @@ export async function sendEmail(env: Env, message: EmailMessage): Promise<EmailR
 }
 
 /** 发不出邮件时的统一错误（调用方会先判断 `shouldEchoCode`）。 */
-export function emailFailure(result: Extract<EmailResult, { ok: false }>): never {
-  throw badGateway(`确认邮件发送失败：${result.detail}（请检查 RESEND_API_KEY 与 RESEND_FROM_EMAIL）`);
+export function emailFailure(result: Extract<EmailResult, { ok: false }>, label = '确认邮件'): never {
+  throw badGateway(`${label}发送失败：${result.detail}（请检查 RESEND_API_KEY 与 RESEND_FROM_EMAIL）`);
 }
 
 /* --------------------------------------------------------------- 邮件模板 */
@@ -162,6 +162,61 @@ export function passwordResetEmail(env: Env, input: { name: string; password: st
       <p style="margin:0 0 12px;font-size:14px;">你的登录密码已被管理员重置，新的临时密码是：</p>
       <p style="margin:0 0 16px;font-size:22px;letter-spacing:3px;font-weight:700;padding:12px 16px;background:#f2f2ef;border-radius:10px;text-align:center;">${escapeHtml(input.password)}</p>
       <p style="margin:0;font-size:13px;color:#6b6b68;">登录后请尽快在「改密码」里换成你自己的密码。</p>`,
+  );
+
+  return { to: '', subject, html, text };
+}
+
+/**
+ * 视图分享邀请：受邀邮箱还没注册时，表格所有者能把这条视图分享用链接邀请出去。
+ * 对方点链接进 `/invite/<token>`，填昵称 + 密码即完成注册，并自动获得这条视图分享。
+ */
+export function viewInviteEmail(
+  env: Env,
+  input: {
+    inviterName: string;
+    databaseName: string;
+    viewName: string;
+    role: 'viewer' | 'editor';
+    limitEdits: boolean;
+    link: string;
+    days: number;
+  },
+): EmailMessage {
+  const app = appName(env);
+  const inviter = input.inviterName || '有人';
+  const database = input.databaseName || '表格';
+  const view = input.viewName || '视图';
+  const ability =
+    input.role === 'editor'
+      ? input.limitEdits
+        ? '可以编辑（限制编辑：每次输入保存后 10 秒内还能改，之后该格只能查看）'
+        : '可以编辑'
+      : '只能查看';
+  const subject = `${inviter}邀请你查看「${database} · ${view}」`;
+  const link = escapeHtml(input.link);
+  const text = [
+    '你好，',
+    '',
+    `${inviter} 在 ${app} 上把「${database}」的视图「${view}」分享给你（${ability}）。`,
+    '',
+    '点击下面的链接，填昵称和密码即可完成注册并直接查看：',
+    input.link,
+    '',
+    `链接 ${input.days} 天内有效。注册完成的账号也可以直接登录 ${app}。`,
+    '如果不是你本人预期收到的邀请，忽略这封邮件即可。',
+  ].join('\n');
+
+  const html = MAIL_PAGE(
+    app,
+    `<p style="margin:0 0 16px;color:#6b6b68;font-size:13px;">${escapeHtml(inviter)} 邀请你协作一个视图</p>
+      <p style="margin:0 0 12px;font-size:14px;">你好：</p>
+      <p style="margin:0 0 12px;font-size:14px;">${escapeHtml(inviter)} 把「${escapeHtml(database)}」的视图「${escapeHtml(view)}」分享给你，${escapeHtml(ability)}。</p>
+      <p style="margin:0 0 16px;"><a href="${link}" style="display:inline-block;padding:10px 18px;background:#29292a;color:#fff;border-radius:8px;text-decoration:none;font-size:14px;">接受邀请并完成注册</a></p>
+      <p style="margin:0 0 8px;font-size:13px;color:#6b6b68;">按钮点不开时，把下面的链接复制到浏览器打开：</p>
+      <p style="margin:0 0 16px;font-size:12px;word-break:break-all;">${link}</p>
+      <p style="margin:0 0 8px;font-size:13px;color:#6b6b68;">链接 ${input.days} 天内有效，注册时填写昵称和密码即可，不需要邮箱确认码。</p>
+      <p style="margin:0;font-size:13px;color:#6b6b68;">如果不是你本人预期收到的邀请，忽略这封邮件即可。</p>`,
   );
 
   return { to: '', subject, html, text };

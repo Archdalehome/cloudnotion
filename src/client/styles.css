@@ -1755,6 +1755,21 @@ textarea.input {
   background: var(--bg-soft);
 }
 
+/* 第一列的复选框：勾选后可以用「删除选中」批量删除账号 */
+.admin-select-col {
+  width: 36px;
+  text-align: center;
+}
+
+.admin-select-col input {
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.admin-select-col input:disabled {
+  cursor: not-allowed;
+}
+
 /* 用户列表里的圆形头像：用昵称 / 邮箱首字母顶上 */
 .avatar {
   display: grid;

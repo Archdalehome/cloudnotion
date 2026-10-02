@@ -467,6 +467,64 @@ export interface AdminPasswordResetResponse {
   resetSelf: boolean;
 }
 
+/**
+ * 视图分享邀请的状态：`POST /api/databases/:id/view-shares` 带 `invite: true`
+ * （目标邮箱还没注册）时返回，前端据此提示「邀请已发出」或展示回显的链接。
+ */
+export interface ViewInviteInfo {
+  email: string;
+  role: 'viewer' | 'editor';
+  limitEdits: boolean;
+  /** 邀请链接的过期时间（毫秒时间戳） */
+  expiresAt: number;
+  /** 邀请链接有效期（天） */
+  ttlDays: number;
+  /** 是否真的把邀请邮件发出去了 */
+  emailDelivered: boolean;
+  /** 仅在没发信时返回（未配置邮件服务 / 收件人是保留测试域）：把链接直接回显出来 */
+  inviteUrl?: string;
+}
+
+/** `GET /api/invites/:token`：受邀人打开邀请链接看到的信息（无需登录）。 */
+export interface InviteDetail {
+  email: string;
+  role: 'viewer' | 'editor';
+  limitEdits: boolean;
+  databaseName: string;
+  viewName: string;
+  inviterName: string;
+  expiresAt: number;
+  expiresInSeconds: number;
+  appName: string;
+}
+
+/**
+ * `POST /api/invites/:token/accept`：填昵称 + 密码完成注册，
+ * 自动获得这条视图分享并直接登录（返回的 cookie 已经是新账号的会话）。
+ */
+export interface InviteAcceptResponse {
+  user: SessionUser;
+  databaseId: string;
+  viewId: string;
+}
+
+/** 管理员批量删除用户的结果（`POST /api/admin/users/delete`）。 */
+export interface AdminDeleteUsersResponse {
+  ok: true;
+  /** 真的删掉的账号 */
+  deleted: { id: string; email: string; name: string }[];
+  /** 没删的（账号不存在 / 是管理员 / 选择的正是自己） */
+  skipped: { id: string; email: string; reason: string }[];
+  /** 连带删除的表格数（表格里的记录 / 备注 / 上传文件一并清理） */
+  databaseCount: number;
+}
+
+/** 视图定向分享的创建结果：`invite` 只在「邀请未注册邮箱」时出现。 */
+export interface ViewShareCreatedResponse {
+  viewShares: ViewShare[];
+  invite?: ViewInviteInfo;
+}
+
 
 /* -------------------------------------------------------------- transport */
 

@@ -150,3 +150,104 @@ export async function loadAdminUser(env: Env, userId: string): Promise<AdminUser
     .first<SqlRow>();
   return row ? adminUserFromRow(row) : null;
 }
+
+/* ------------------------------------------------------------ 删除注册账号 */
+
+/** 一次请求最多删除多少个账号 */
+export const MAX_DELETE_USERS = 100;
+/** 绑定参数 / IN 列表的分片大小 */
+const DELETE_CHUNK = 100;
+
+export interface AdminDeleteUsersResult {
+  deleted: { id: string; email: string; name: string }[];
+  skipped: { id: string; email: string; reason: string }[];
+  /** 连带删除的表格数 */
+  databaseCount: number;
+}
+
+/**
+ * 删除一批注册账号（「用户管理」里的批量删除）。
+ *
+ * 删除是彻底的：账号自己拥有的表格（连同里面的记录 / 备注 / 字段 / 视图 /
+ * 分享链接）以及 R2 里的上传文件一起清掉；在别人表格里的成员身份、定向分享、
+ * 私信、会话也一并移除。
+ *
+ * 以下情况跳过（放在 `skipped` 里返回，不算失败）：
+ *   - 账号不存在；
+ *   - `users.is_admin = 1`：管理员账号需要先把 is_admin 改回 0；
+ *   - 传进来的正是操作者自己：避免把自己删掉后失去用户管理入口。
+ */
+export async function deleteAdminUsers(
+  env: Env,
+  ids: string[],
+  actorId: string,
+): Promise<AdminDeleteUsersResult> {
+  const unique = [...new Set(ids.map((id) => String(id).trim()).filter(Boolean))].slice(0, MAX_DELETE_USERS);
+  const result: AdminDeleteUsersResult = { deleted: [], skipped: [], databaseCount: 0 };
+  if (!unique.length) return result;
+
+  const found: SqlRow[] = [];
+  for (let index = 0; index < unique.length; index += DELETE_CHUNK) {
+    const slice = unique.slice(index, index + DELETE_CHUNK);
+    const { results } = await env.DB.prepare(
+      `SELECT id, email, name, is_admin FROM users WHERE id IN (${slice.map(() => '?').join(', ')})`,
+    )
+      .bind(...slice)
+      .all<SqlRow>();
+    found.push(...(results ?? []));
+  }
+  const byId = new Map(found.map((row) => [sqlString(row, 'id'), row]));
+
+  for (const id of unique) {
+    const row = byId.get(id);
+    if (!row) {
+      result.skipped.push({ id, email: '', reason: '账号不存在' });
+      continue;
+    }
+    const email = sqlString(row, 'email');
+    const name = sqlString(row, 'name');
+    if (id === actorId) {
+      result.skipped.push({ id, email, reason: '不能删除自己的账号' });
+      continue;
+    }
+    if (sqlNumber(row, 'is_admin') === 1) {
+      result.skipped.push({ id, email, reason: '管理员账号不能删除（请先取消管理员）' });
+      continue;
+    }
+
+    // 先记下这个账号的表格里上传过的文件，元数据删掉后就查不到了
+    const [fileRows, countRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT f.r2_key AS r2_key FROM files f JOIN databases d ON d.id = f.database_id WHERE d.owner_id = ?`,
+      )
+        .bind(id)
+        .all<SqlRow>(),
+      env.DB.prepare('SELECT COUNT(*) AS total FROM databases WHERE owner_id = ?').bind(id).first<SqlRow>(),
+    ]);
+
+    await env.DB.batch([
+      // 自己拥有的表格：记录 / 字段 / 视图 / 分享 / 备注 / 文件元数据由外键级联清理
+      env.DB.prepare('DELETE FROM databases WHERE owner_id = ?').bind(id),
+      // 在别人表格里的身份：成员 / 定向分享 / 会话 / 私信 / 「限制编辑」记录
+      env.DB.prepare('DELETE FROM database_members WHERE user_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM view_shares WHERE user_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM note_mentions WHERE user_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM cell_edits WHERE editor_key = ?').bind(`user:${id}`),
+      // 还没接受的邀请：邮箱已经腾出来，旧邀请链接不该还能注册
+      env.DB.prepare('DELETE FROM invites WHERE email = ? AND accepted_at IS NULL').bind(email),
+      env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
+    ]);
+
+    // 最后把 R2 里的上传文件删掉（删不掉也不影响账号已经被删除）
+    const keys = (fileRows.results ?? []).map((item) => sqlString(item, 'r2_key')).filter(Boolean);
+    for (let index = 0; index < keys.length; index += DELETE_CHUNK) {
+      await env.BUCKET.delete(keys.slice(index, index + DELETE_CHUNK));
+    }
+
+    result.deleted.push({ id, email, name });
+    result.databaseCount += sqlNumber(countRow ?? {}, 'total');
+  }
+
+  return result;
+}

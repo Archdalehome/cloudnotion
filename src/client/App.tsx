@@ -10,6 +10,7 @@ import { AuthPage } from './components/AuthPage';
 import { ChangePasswordDialog } from './components/ChangePasswordDialog';
 import { DatabasePage } from './components/DatabasePage';
 import { InboxButton } from './components/InboxButton';
+import { InvitePage } from './components/InvitePage';
 import { PublicPage } from './components/PublicPage';
 import { Sidebar } from './components/Sidebar';
 import { UserChip } from './components/UserChip';
@@ -61,6 +62,12 @@ function shareTokenFromPath(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** `/invite/<token>`：视图分享邀请链接，受邀人在这里填昵称 + 密码完成注册。 */
+function inviteTokenFromPath(): string | null {
+  const match = /^\/invite\/([^/]+)\/?$/.exec(window.location.pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function summaryOf(detail: DatabaseDetail): DatabaseSummary {
   return {
     id: detail.id,
@@ -80,7 +87,8 @@ function summaryOf(detail: DatabaseDetail): DatabaseSummary {
 
 export function App() {
   const shareToken = useMemo(shareTokenFromPath, []);
-  const [booting, setBooting] = useState(!shareToken);
+  const inviteToken = useMemo(inviteTokenFromPath, []);
+  const [booting, setBooting] = useState(!shareToken && !inviteToken);
   const [appName, setAppName] = useState('Qafield');
   const [user, setUser] = useState<SessionUser | null>(null);
   const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
@@ -100,6 +108,8 @@ export function App() {
   const [adminView, setAdminView] = useState(false);
   /** 「修改密码」弹窗 */
   const [changingPassword, setChangingPassword] = useState(false);
+  /** 邀请页已经处理完（注册成功 / 点了「去登录」）：回到正常的登录或工作区 */
+  const [inviteDone, setInviteDone] = useState(false);
 
   const toast = useCallback((message: string, kind: 'info' | 'error' = 'info') => {
     const id = Date.now() + Math.random();
@@ -164,7 +174,8 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (shareToken) return;
+    // 公开分享页 / 邀请页自己取数据，不需要会话与表格列表
+    if (shareToken || inviteToken) return;
     let cancelled = false;
     setBooting(true);
     void bootstrapSession().finally(() => {
@@ -173,7 +184,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [shareToken, bootstrapSession]);
+  }, [shareToken, inviteToken, bootstrapSession]);
 
   /** 不是管理员（或退出登录）时，把主区域从「用户管理」收回来 */
   useEffect(() => {
@@ -322,6 +333,20 @@ export function App() {
     [bootstrapSession, toast],
   );
 
+
+  // 受邀人通过邮件里的 /invite/<token> 打开：填昵称 + 密码完成注册后直接进工作区
+  if (inviteToken && !inviteDone && !user) {
+    return (
+      <InvitePage
+        token={inviteToken}
+        onAuthenticated={(next) => {
+          setInviteDone(true);
+          reauthenticate(next);
+        }}
+        onGoToLogin={() => setInviteDone(true)}
+      />
+    );
+  }
 
   if (shareToken) return <PublicPage token={shareToken} />;
 

@@ -1,9 +1,13 @@
 /**
- * 视图定向分享面板：把一个视图（含它的筛选与可见字段）分享给某个已注册账号。
+ * 视图定向分享面板：把一个视图（含它的筛选与可见字段）分享给别人。
+ *
+ * 目标邮箱已经注册 → 直接加一条视图分享；
+ * 目标邮箱还没注册 → 弹确认框，确认后发送邀请链接，对方点链接
+ * （`/invite/<token>`）填昵称 + 密码即完成注册，并自动获得这条视图分享。
  * 成员管理与公开链接已从界面上移除，这里只保留「视图定向分享」。
  */
 import { useState } from 'react';
-import type { DatabaseDetail, Role, ViewDef, ViewShare } from '../../shared/types';
+import type { DatabaseDetail, Role, ViewDef, ViewInviteInfo, ViewShare } from '../../shared/types';
 import { ApiError, api } from '../api';
 import { Modal } from './Modal';
 
@@ -34,35 +38,76 @@ export function SharePanel({
   /** 「限制编辑」：只对「可编辑」的分享有意义，默认不限制 */
   const [viewLimitEdits, setViewLimitEdits] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** 刚发出的「邀请未注册用户」结果：邮件没真发出去时会把链接回显在这里 */
+  const [invite, setInvite] = useState<ViewInviteInfo | null>(null);
 
-  const run = async (action: () => Promise<void>, fallback: string) => {
+  const run = async (
+    action: () => Promise<void>,
+    fallback: string,
+    /** 返回 true 表示这个错误已经处理过，不用再弹默认的错误提示 */
+    onError?: (cause: unknown) => Promise<boolean> | boolean,
+  ) => {
     if (busy) return;
     setBusy(true);
     try {
       await action();
     } catch (cause) {
+      if (onError && (await onError(cause))) return;
       onToast(cause instanceof ApiError ? cause.message : fallback, 'error');
     } finally {
       setBusy(false);
     }
   };
 
-  /** 定向分享：只把某一个视图（含其筛选与可见字段）分享给指定账号。 */
-  const addViewShare = () =>
-    run(async () => {
-      const target = viewEmail.trim();
-      if (!target || !viewId) return;
-      const result = await api.createViewShare(database.id, {
-        viewId,
-        email: target,
-        role: viewRole,
-        // 可查看的分享本来就不能改，「限制编辑」只随「可编辑」一起提交
-        limitEdits: viewRole === 'editor' && viewLimitEdits,
-      });
-      onViewShares(result.viewShares);
-      setViewEmail('');
-      onToast(viewRole === 'editor' && viewLimitEdits ? '视图已定向分享（限制编辑）' : '视图已定向分享');
-    }, '视图分享失败');
+  /**
+   * 定向分享：只把某一个视图（含其筛选与可见字段）分享给指定账号。
+   *
+   * 目标邮箱还没注册时服务端返回 `email_not_registered`：这里弹一个确认框，
+   * 确认后带 `invite: true` 再调一次，把邀请链接发到对方邮箱
+   * （对方点链接填昵称 + 密码即完成注册，并自动获得这条视图分享）。
+   */
+  const addViewShare = () => {
+    const target = viewEmail.trim();
+    if (busy || !target || !viewId) return;
+    const payload = {
+      viewId,
+      email: target,
+      role: viewRole,
+      // 可查看的分享本来就不能改，「限制编辑」只随「可编辑」一起提交
+      limitEdits: viewRole === 'editor' && viewLimitEdits,
+    };
+    return run(
+      async () => {
+        const result = await api.createViewShare(database.id, payload);
+        onViewShares(result.viewShares);
+        setViewEmail('');
+        setInvite(null);
+        onToast(viewRole === 'editor' && viewLimitEdits ? '视图已定向分享（限制编辑）' : '视图已定向分享');
+      },
+      '视图分享失败',
+      async (cause) => {
+        if (!(cause instanceof ApiError) || cause.code !== 'email_not_registered') return false;
+        const confirmed = window.confirm(
+          `「${target}」还没有注册账号。\n\n要发送邀请链接吗？对方点开邮件里的链接，填昵称和密码即可完成注册，并自动看到这个视图。`,
+        );
+        if (!confirmed) return true;
+        try {
+          const invited = await api.createViewShare(database.id, { ...payload, invite: true });
+          onViewShares(invited.viewShares);
+          setViewEmail('');
+          setInvite(invited.invite ?? null);
+          onToast(
+            invited.invite?.emailDelivered
+              ? `邀请链接已发送到 ${target}`
+              : `邀请链接已生成（未发邮件），请把链接发给 ${target}`,
+          );
+        } catch (nested) {
+          onToast(nested instanceof ApiError ? nested.message : '发送邀请失败', 'error');
+        }
+        return true;
+      },
+    );
+  };
 
   const removeViewShare = (share: ViewShare) =>
     run(async () => {
@@ -81,6 +126,7 @@ export function SharePanel({
           email={viewEmail}
           role={viewRole}
           limitEdits={viewLimitEdits}
+          invite={invite}
           busy={busy}
           onView={setViewId}
           onEmail={setViewEmail}
@@ -104,6 +150,8 @@ interface ShareViewsProps {
   role: 'editor' | 'viewer';
   /** 分享时是否勾选「限制编辑」（仅 role === 'editor' 时提交） */
   limitEdits: boolean;
+  /** 刚发出的邀请（未注册邮箱）：邮件没发出去时把链接回显在这里 */
+  invite: ViewInviteInfo | null;
   busy: boolean;
   onView: (value: string) => void;
   onEmail: (value: string) => void;
@@ -113,7 +161,7 @@ interface ShareViewsProps {
   onRemove: (share: ViewShare) => void;
 }
 
-/** 视图定向分享：把单个视图（含筛选与字段可见性）分享给某个已注册账号。 */
+/** 视图定向分享：把单个视图（含筛选与字段可见性）分享给某个账号，或邀请其注册。 */
 function ShareViews({
   views,
   viewShares,
@@ -121,6 +169,7 @@ function ShareViews({
   email,
   role,
   limitEdits,
+  invite,
   busy,
   onView,
   onEmail,
@@ -193,6 +242,26 @@ function ShareViews({
           分享视图
         </button>
       </form>
+
+      {/* 对方邮箱还没注册：确认后服务端会把邀请链接发过去，这里说明一下当前状态 */}
+      {invite ? (
+        <div className="field" style={{ marginTop: 10 }}>
+          <span>
+            {invite.emailDelivered
+              ? `邀请邮件已发送到 ${invite.email}，${invite.ttlDays} 天内有效。`
+              : `邮件服务未配置，请把下面的邀请链接发给 ${invite.email}（${invite.ttlDays} 天内有效）。`}
+          </span>
+          {invite.inviteUrl ? (
+            <input
+              className="input"
+              readOnly
+              value={invite.inviteUrl}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          ) : null}
+          <span className="small muted">对方点开链接填昵称和密码即完成注册，并自动获得这个视图的分享。</span>
+        </div>
+      ) : null}
 
       {role === 'editor' ? (
         <label className="row gap" style={{ marginTop: 8 }}>

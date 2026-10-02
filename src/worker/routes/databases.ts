@@ -7,7 +7,6 @@ import type {
   Property,
   Role,
   RowRecord,
-  SelectOption,
   ViewDef,
 } from '../../shared/types';
 import { rowMatchesView } from '../../shared/viewFilter';
@@ -22,6 +21,7 @@ import {
   asString,
   badRequest,
   conflict,
+  HttpError,
   json,
   newId,
   normalizeEmail,
@@ -32,6 +32,7 @@ import {
   sqlString,
   type SqlRow,
 } from '../http';
+import { deliverViewInvite, issueViewInvite } from '../invites';
 import {
   databaseSummaryFromRow,
   memberFromRow,
@@ -313,55 +314,6 @@ export async function createDatabase(
     properties,
     views: await loadViews(env, databaseId),
   };
-}
-
-function findOption(property: Property | undefined, name: string): SelectOption | null {
-  if (!property?.config.options) return null;
-  return property.config.options.find((option) => option.name === name) ?? null;
-}
-
-/** Demo content created for every new account (mirrors Notion's onboarding page). */
-export async function createStarterDatabase(env: Env, userId: string): Promise<void> {
-  const { databaseId, properties } = await createDatabase(env, userId, {
-    name: '我的第一个表格',
-    icon: '🚀',
-    description: '自动生成的示例数据，可随时编辑或删除',
-    templateId: 'task',
-  });
-
-  const titleProperty = properties.find((p) => p.name === '任务名称');
-  const statusProperty = properties.find((p) => p.name === '状态');
-  const priorityProperty = properties.find((p) => p.name === '优先级');
-  const dueProperty = properties.find((p) => p.name === '截止日期');
-  const doneProperty = properties.find((p) => p.name === '已完成');
-  if (!titleProperty) return;
-
-  const day = (offset: number) =>
-    new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
-
-  const samples: { title: string; status: string; priority: string; due: string; done: boolean }[] = [
-    { title: '试用各类字段（文本 / 单选 / 日期 / 文件）', status: '进行中', priority: '高', due: day(1), done: false },
-    { title: '邀请同事协作并设置权限', status: '未开始', priority: '中', due: day(3), done: false },
-    { title: '在画廊视图中查看卡片效果', status: '已完成', priority: '低', due: day(-1), done: true },
-  ];
-
-  const now = Date.now();
-  const statements = samples.map((sample, index) => {
-    const values: Record<string, unknown> = {};
-    const status = findOption(statusProperty, sample.status);
-    const priority = findOption(priorityProperty, sample.priority);
-    if (status) values[statusProperty!.id] = status;
-    if (priority) values[priorityProperty!.id] = priority;
-    values[titleProperty.id] = sample.title;
-    if (dueProperty) values[dueProperty.id] = { start: sample.due, end: null, includeTime: false };
-    if (doneProperty) values[doneProperty.id] = sample.done;
-    return env.DB.prepare(
-      `INSERT INTO records (id, database_id, "values", position, created_by, updated_by, is_archived, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-    ).bind(newId(), databaseId, JSON.stringify(values), (index + 1) * 1000, userId, userId, now, now);
-  });
-
-  await env.DB.batch(statements);
 }
 
 export async function countRecords(env: Env, databaseId: string): Promise<number> {
@@ -775,6 +727,14 @@ async function deleteShareHandler(ctx: RequestContext): Promise<Response> {
   return json({ shares: await loadShares(ctx.env, databaseId) });
 }
 
+/**
+ * 视图定向分享：把一个视图（含它的筛选与可见字段）分享给某个账号。
+ *
+ * 目标邮箱还没注册时不再直接报错：
+ *   - 不带 `invite` → 404 `email_not_registered`，前端据此弹确认框问「要不要发邀请链接」；
+ *   - 带 `invite: true` → 生成一条邀请（`invites` 表）并把 `/invite/<token>` 链接发到对方邮箱，
+ *     对方填昵称 + 密码即完成注册（见 routes/invites.ts），注册后自动获得这条视图分享。
+ */
 async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   const access = await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'manage');
@@ -784,6 +744,7 @@ async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
   // 「限制编辑」：只对可编辑分享有意义（只读分享本来就不能改）
   const limitEdits = role === 'editor' && asFlag(body.limitEdits);
   const email = normalizeEmail(body.email);
+  const inviteRequested = asFlag(body.invite);
 
   const view = await ctx.env.DB.prepare('SELECT id FROM views WHERE id = ? AND database_id = ?')
     .bind(viewId, ctx.params.id)
@@ -791,7 +752,27 @@ async function createViewShareHandler(ctx: RequestContext): Promise<Response> {
   if (!view) throw notFound('视图不存在');
 
   const target = await ctx.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first<SqlRow>();
-  if (!target) throw notFound('该邮箱尚未注册，请先让对方注册账号');
+  if (!target) {
+    // 邮箱还没注册：先让前端确认「是否发送邀请链接」，确认后带 invite: true 再来一次
+    if (!inviteRequested) {
+      throw new HttpError(404, 'email_not_registered', '该邮箱还没有注册账号，可以邀请对方注册后再分享');
+    }
+    const invite = await issueViewInvite(ctx.env, {
+      email,
+      databaseId: ctx.params.id,
+      viewId,
+      role,
+      limitEdits,
+      invitedBy: user.id,
+    });
+    // 发信失败会删掉这条邀请并抛 502；成功 / 回显才返回
+    const deliveredInvite = await deliverViewInvite(ctx.env, invite, ctx.url.origin);
+    return json(
+      { viewShares: await loadViewShares(ctx.env, ctx.params.id), invite: deliveredInvite },
+      { status: 201 },
+    );
+  }
+
   const targetId = sqlString(target, 'id');
   if (targetId === access.ownerId) throw conflict('所有者已经拥有该表格');
 

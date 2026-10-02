@@ -2,14 +2,17 @@
  * /api/admin/* —— 用户管理（仅超级管理员）。
  *
  * 只有 `users.is_admin = 1` 的账号能访问，全部经过 `requireAdmin`：
- *   GET    /api/admin/users               注册用户列表（可按昵称 / 邮箱搜索、分页）
- *   PATCH  /api/admin/users/:id           修改某个用户的注册信息（昵称 / 邮箱）
- *   POST   /api/admin/users/:id/password  重置某个用户的密码（可指定，也可随机生成）
+ *   GET    /api/admin/users                注册用户列表（可按昵称 / 邮箱搜索、分页）
+ *   PATCH  /api/admin/users/:id            修改某个用户的注册信息（昵称 / 邮箱）
+ *   POST   /api/admin/users/:id/password   重置某个用户的密码（可指定，也可随机生成）
+ *   POST   /api/admin/users/delete         批量删除账号（用户管理第一列的复选框 → 「删除选中」）
  *
  * 重置密码会让该用户在所有设备上立即下线，并尽力把新密码邮件通知给本人。
+ * 删除账号会连同他拥有的表格（记录 / 备注 / 上传文件）一起清理，
+ * 具体范围见 worker/admin.ts 的 `deleteAdminUsers`。
  */
 import { hashPassword, requireAdmin, validatePasswordStrength } from '../auth';
-import { loadAdminUser, loadAdminUsers } from '../admin';
+import { MAX_DELETE_USERS, deleteAdminUsers, loadAdminUser, loadAdminUsers } from '../admin';
 import { passwordResetEmail, sendEmail, shouldEchoCode } from '../email';
 import {
   asString,
@@ -129,8 +132,25 @@ async function resetUserPasswordHandler(ctx: RequestContext): Promise<Response> 
   });
 }
 
+/**
+ * 批量删除注册账号（用户管理里的复选框 + 「删除选中」）。
+ * 管理员自己、以及其它管理员账号会被跳过（`skipped`），不算失败。
+ */
+async function deleteUsersHandler(ctx: RequestContext): Promise<Response> {
+  const admin = await requireAdmin(ctx.request, ctx.env);
+  const body = await readJson(ctx.request);
+  const raw = Array.isArray(body.ids) ? body.ids : [];
+  if (!raw.length) throw badRequest('请先选择要删除的账号');
+  if (raw.length > MAX_DELETE_USERS) throw badRequest(`一次最多删除 ${MAX_DELETE_USERS} 个账号`);
+
+  const ids = raw.map((value) => asString(value, '用户', { required: true, max: 64 }));
+  const result = await deleteAdminUsers(ctx.env, ids, admin.id);
+  return json({ ok: true, ...result });
+}
+
 export const adminRoutes: Route[] = [
   { method: 'GET', path: '/api/admin/users', handler: listUsersHandler },
   { method: 'PATCH', path: '/api/admin/users/:id', handler: updateUserHandler },
   { method: 'POST', path: '/api/admin/users/:id/password', handler: resetUserPasswordHandler },
+  { method: 'POST', path: '/api/admin/users/delete', handler: deleteUsersHandler },
 ];

@@ -11,8 +11,9 @@
  * It registers throw-away accounts and walks the critical path: two-step
  * signup (email code) -> session -> create table -> add field -> records
  * (create/update/duplicate/delete) -> views -> share links -> public read +
- * edit -> members -> notes + @mention inbox -> password change -> admin panel
- * -> file upload -> cleanup. Exit code is 1 when any check fails.
+ * edit -> members -> notes + @mention inbox -> view invites (邀请未注册邮箱)
+ * -> password change -> admin panel (含批量删除账号) -> file upload ->
+ * cleanup. Exit code is 1 when any check fails.
  *
  * Signup needs the 6-digit code that the API emails out. To keep this runnable
  * unattended, `POST /api/auth/register` echoes it back as `devCode` whenever
@@ -241,7 +242,8 @@ async function main() {
   const starterCount = session.data?.databases?.length ?? 0;
   check('session carries the new user', session.data?.user?.email === email);
   check('session exposes the admin flag', registered.data?.user?.isAdmin === false);
-  check('starter table created', starterCount >= 1, `${starterCount} table(s)`);
+  // 新账号从空白开始：不再自动生成「我的第一个表格」
+  check('a new account has no starter table', starterCount === 0, `${starterCount} table(s)`);
   check('session exposes app meta', typeof session.data?.appName === 'string' && typeof session.data?.maxUploadMb === 'number');
 
   // ------------------------------------------------------------- table + fields
@@ -1236,6 +1238,115 @@ async function main() {
   const cleanupViewShare = await call(`/api/view-shares/${(reShareView.data?.viewShares ?? [])[0]?.id}`, { method: 'DELETE' });
   check('cleanup the view share', cleanupViewShare.status === 200, `status=${cleanupViewShare.status}`);
 
+  // ------------------------------------------------------- 邀请未注册邮箱
+  section('view invites (邀请未注册邮箱)');
+  const inviteeEmail = `invitee+${Date.now()}@example.com`;
+  const invitePassword = 'Invite1pass';
+
+  // 1) 不带 invite：服务端只回「该邮箱还没注册」，前端据此弹确认框
+  const needsInvite = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: baseView.id, email: inviteeEmail, role: 'viewer' },
+  });
+  check(
+    'sharing with an unregistered email asks for confirmation',
+    needsInvite.status === 404 && needsInvite.data?.error?.code === 'email_not_registered',
+    `status=${needsInvite.status} code=${needsInvite.data?.error?.code ?? ''}`,
+  );
+
+  // 2) invite: true：创建邀请并发邀请链接（测试域不发信，直接把链接回显出来）
+  const invitedShare = await call(`/api/databases/${databaseId}/view-shares`, {
+    method: 'POST',
+    body: { viewId: baseView.id, email: inviteeEmail, role: 'editor', limitEdits: true, invite: true },
+  });
+  const inviteUrl =
+    typeof invitedShare.data?.invite?.inviteUrl === 'string' ? invitedShare.data.invite.inviteUrl : '';
+  const inviteToken = /\/invite\/([^/?#]+)/.exec(inviteUrl)?.[1] ?? '';
+  check(
+    'sharing with an unregistered email sends an invite',
+    invitedShare.status === 201 && Boolean(inviteToken) && invitedShare.data?.invite?.emailDelivered === false,
+    `status=${invitedShare.status} token=${inviteToken ? 'yes' : 'no'} delivered=${invitedShare.data?.invite?.emailDelivered}`,
+  );
+  check(
+    'an invite is not a view share until accepted',
+    (invitedShare.data?.viewShares ?? []).every((item) => item.email !== inviteeEmail),
+    `viewShares=${invitedShare.data?.viewShares?.length ?? 0}`,
+  );
+
+  // 3) 受邀人打开邀请链接（无需登录）
+  const inviteDetail = await call(`/api/invites/${inviteToken}`, { cookie: false });
+  check(
+    'the invite link shows the shared view',
+    inviteDetail.status === 200 &&
+      inviteDetail.data?.invite?.email === inviteeEmail &&
+      inviteDetail.data?.invite?.viewName === baseView.name &&
+      inviteDetail.data?.invite?.role === 'editor',
+    `status=${inviteDetail.status} view=${inviteDetail.data?.invite?.viewName ?? ''}`,
+  );
+  const badInvite = await call('/api/invites/not-a-real-token', { cookie: false });
+  check('an unknown invite token is a 404', badInvite.status === 404, `status=${badInvite.status}`);
+
+  const weakInviteAccept = await call(`/api/invites/${inviteToken}/accept`, {
+    method: 'POST',
+    body: { name: '受邀人', password: 'short' },
+  });
+  check('the invited signup enforces the password rules', weakInviteAccept.status === 400, `status=${weakInviteAccept.status}`);
+
+  // 4) 填昵称 + 密码完成注册：直接拿到会话（cookie 换成新账号）
+  const accepted = await call(`/api/invites/${inviteToken}/accept`, {
+    method: 'POST',
+    body: { name: '受邀同事', password: invitePassword },
+  });
+  check(
+    'accepting the invite registers the account',
+    accepted.status === 201 && accepted.data?.user?.email === inviteeEmail && accepted.data?.user?.name === '受邀同事',
+    `status=${accepted.status} err=${accepted.data?.error?.message ?? ''}`,
+  );
+  const inviteeSession = await call('/api/session');
+  const inviteeTables = inviteeSession.data?.databases ?? [];
+  check(
+    'the invited account only has the shared table',
+    inviteeSession.data?.user?.email === inviteeEmail &&
+      inviteeTables.length === 1 &&
+      inviteeTables[0]?.viewScoped === true,
+    `tables=${inviteeTables.length} viewScoped=${inviteeTables[0]?.viewScoped}`,
+  );
+  const inviteeDetail = await call(`/api/databases/${databaseId}`);
+  check(
+    'the invited account sees only the shared view',
+    inviteeDetail.status === 200 &&
+      (inviteeDetail.data?.views ?? []).length === 1 &&
+      inviteeDetail.data.views[0]?.id === baseView.id,
+    `status=${inviteeDetail.status} views=${inviteeDetail.data?.views?.length ?? 0}`,
+  );
+  const inviteeWrite = await call(`/api/databases/${databaseId}/records`, { method: 'POST', body: { values: {} } });
+  check('the invited editor may write', inviteeWrite.status === 201, `status=${inviteeWrite.status}`);
+  if (inviteeWrite.data?.record?.id) await call(`/api/records/${inviteeWrite.data.record.id}`, { method: 'DELETE' });
+
+  const replayedInvite = await call(`/api/invites/${inviteToken}/accept`, {
+    cookie: false,
+    method: 'POST',
+    body: { name: '再来一次', password: invitePassword },
+  });
+  check('an accepted invite cannot be replayed', replayedInvite.status === 409, `status=${replayedInvite.status}`);
+
+  const inviteeLogin = await call('/api/auth/login', {
+    cookie: false,
+    method: 'POST',
+    body: { email: inviteeEmail, password: invitePassword },
+  });
+  check('the invited account can log in', inviteeLogin.status === 200, `status=${inviteeLogin.status}`);
+
+  // 接受之后，所有者这边才真的多出一条视图分享
+  cookie = ownerCookie;
+  const ownerAfterInvite = await call(`/api/databases/${databaseId}`);
+  const acceptedShare = (ownerAfterInvite.data?.viewShares ?? []).find((item) => item.email === inviteeEmail);
+  check(
+    'the accepted invite becomes a view share',
+    acceptedShare?.role === 'editor' && acceptedShare?.limitEdits === true,
+    `role=${acceptedShare?.role ?? ''} limitEdits=${acceptedShare?.limitEdits ?? ''}`,
+  );
+
   // ------------------------------------------------- 人员类筛选（当前用户）
   section('people filters (当前用户)');
   const peopleField = await call(`/api/databases/${databaseId}/properties`, {
@@ -1801,6 +1912,51 @@ async function main() {
 
     const unknownReset = await asAdmin('/api/admin/users/does-not-exist/password', { method: 'POST', body: {} });
     check('resetting an unknown user is a 404', unknownReset.status === 404, `status=${unknownReset.status}`);
+
+    // 批量删除：把「邀请注册」那个测试账号删掉（顺便验证级联清理）
+    const deleteList = await asAdmin(`/api/admin/users?search=${encodeURIComponent(inviteeEmail)}`);
+    const inviteeRow = (deleteList.data?.users ?? []).find((item) => item.email === inviteeEmail);
+    const deleteResult = inviteeRow
+      ? await asAdmin('/api/admin/users/delete', { method: 'POST', body: { ids: [inviteeRow.id] } })
+      : { status: 0, data: null };
+    check(
+      'the admin can delete a registered user',
+      deleteResult.status === 200 && deleteResult.data?.deleted?.length === 1,
+      `status=${deleteResult.status} deleted=${deleteResult.data?.deleted?.length ?? 0}`,
+    );
+    const afterDelete = await asAdmin(`/api/admin/users?search=${encodeURIComponent(inviteeEmail)}`);
+    check(
+      'the deleted user is gone from the list',
+      (afterDelete.data?.users ?? []).length === 0,
+      `matches=${(afterDelete.data?.users ?? []).length}`,
+    );
+    const deletedLogin = await call('/api/auth/login', {
+      cookie: false,
+      method: 'POST',
+      body: { email: inviteeEmail, password: invitePassword },
+    });
+    check('a deleted user can no longer sign in', deletedLogin.status === 401, `status=${deletedLogin.status}`);
+
+    // 自己的账号 / 不存在的账号：跳过而不是报错
+    const adminIdForDelete = adminLogin.data?.user?.id;
+    const selfDelete = adminIdForDelete
+      ? await asAdmin('/api/admin/users/delete', { method: 'POST', body: { ids: [adminIdForDelete] } })
+      : { status: 0, data: null };
+    check(
+      'the admin cannot delete their own account',
+      selfDelete.status === 200 &&
+        selfDelete.data?.deleted?.length === 0 &&
+        String(selfDelete.data?.skipped?.[0]?.reason ?? '').includes('自己'),
+      `deleted=${selfDelete.data?.deleted?.length ?? 0} reason=${selfDelete.data?.skipped?.[0]?.reason ?? ''}`,
+    );
+    const emptyDelete = await asAdmin('/api/admin/users/delete', { method: 'POST', body: { ids: [] } });
+    check('deleting nothing is a 400', emptyDelete.status === 400, `status=${emptyDelete.status}`);
+    const unknownDelete = await asAdmin('/api/admin/users/delete', { method: 'POST', body: { ids: ['does-not-exist'] } });
+    check(
+      'deleting an unknown account is reported as skipped',
+      unknownDelete.status === 200 && unknownDelete.data?.skipped?.length === 1,
+      `status=${unknownDelete.status} skipped=${unknownDelete.data?.skipped?.length ?? 0}`,
+    );
 
     // 给自己重置：连自己当前的会话也一起作废，必须重新登录
     // 只有测试管理员才真做 —— 真实管理员会被改密码（回写成 Secret 值）并踢下线

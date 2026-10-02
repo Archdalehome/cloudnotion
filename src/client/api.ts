@@ -3,6 +3,7 @@
  * Session handling relies on the HttpOnly cookie, hence `credentials: 'same-origin'`.
  */
 import type {
+  AdminDeleteUsersResponse,
   AdminPasswordResetResponse,
   AdminUserListResponse,
   CellEditLocks,
@@ -11,6 +12,8 @@ import type {
   DatabaseSummary,
   FieldType,
   InboxResponse,
+  InviteAcceptResponse,
+  InviteDetail,
   Property,
   PropertyConfig,
   PublicDatabaseResponse,
@@ -21,6 +24,7 @@ import type {
   SessionUser,
   ViewConfig,
   ViewDef,
+  ViewShareCreatedResponse,
   ViewType,
 } from '../shared/types';
 
@@ -142,6 +146,15 @@ export const api = {
     ),
   adminResetUserPassword: (id: string, body: { password?: string } = {}) =>
     json<AdminPasswordResetResponse>(`/api/admin/users/${encodeURIComponent(id)}/password`, 'POST', body),
+  /** 批量删除账号：连同他拥有的表格（记录 / 备注 / 上传文件）一起清理 */
+  adminDeleteUsers: (ids: string[]) =>
+    json<AdminDeleteUsersResponse>('/api/admin/users/delete', 'POST', { ids }),
+
+  /** 受邀人打开邀请链接：邀请信息（表格 / 视图 / 邀请人），无需登录 */
+  invite: (token: string) => json<{ invite: InviteDetail }>(`/api/invites/${encodeURIComponent(token)}`, 'GET'),
+  /** 接受邀请：填昵称 + 密码即完成注册，并直接登录（自动获得该视图分享） */
+  acceptInvite: (token: string, body: { name: string; password: string }) =>
+    json<InviteAcceptResponse>(`/api/invites/${encodeURIComponent(token)}/accept`, 'POST', body),
 
   listDatabases: () => json<{ databases: DatabaseSummary[] }>('/api/databases', 'GET'),
   createDatabase: (body: { name: string; icon?: string; description?: string; templateId?: string }) =>
@@ -230,11 +243,14 @@ export const api = {
     json<{ views: ViewDef[] }>(`/api/views/${id}`, 'PATCH', body),
   deleteView: (id: string) => json<{ views: ViewDef[] }>(`/api/views/${id}`, 'DELETE'),
 
+  /**
+   * 视图定向分享。目标邮箱还没注册时返回 404 `email_not_registered`（前端弹确认框），
+   * 带 `invite: true` 再调一次则改为发送邀请链接，响应的 `invite` 里带上投递结果。
+   */
   createViewShare: (
     databaseId: string,
-    body: { viewId: string; email: string; role: 'editor' | 'viewer'; limitEdits?: boolean },
-  ) =>
-    json<{ viewShares: DatabaseDetail['viewShares'] }>(`/api/databases/${databaseId}/view-shares`, 'POST', body),
+    body: { viewId: string; email: string; role: 'editor' | 'viewer'; limitEdits?: boolean; invite?: boolean },
+  ) => json<ViewShareCreatedResponse>(`/api/databases/${databaseId}/view-shares`, 'POST', body),
   deleteViewShare: (id: string) =>
     json<{ viewShares: DatabaseDetail['viewShares'] }>(`/api/view-shares/${id}`, 'DELETE'),
 

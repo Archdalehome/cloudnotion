@@ -16,8 +16,8 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希）；**注册分两步**：先发 6 位邮箱确认码（`POST /api/auth/register` 返回 202 + `codeTtl`），验证码通过才写入 `users`，所以**没确认过的邮箱不会占号**；登录后在侧边栏底部「改密码」凭当前密码自行修改（作废其他设备的会话、当前设备保留）；用户名 / 邮箱 / 退出平时在侧边栏底部，侧边栏收起（手机端抽屉关闭）时挪到右上角顶部条 |
-| 用户管理 | 仅供 `ADMIN_EMAIL` 指定的超级管理员（首次登录自动创建 / 提升，见 [DEPLOY.md 6.6](./DEPLOY.md)）：侧边栏底部的「用户管理」面板支持按邮箱 / 昵称搜索 + 分页，显示建表数 / 协作者数 / 最近活跃时间，可改昵称与邮箱，也可一键重置密码（新密码邮件通知本人并作废其全部会话；重置自己时连当前会话一起失效，需重新登录） |
+| 账号 | 邮箱 + 密码注册/登录/登出，HttpOnly Cookie 会话（DB 只存 token 哈希）；**注册分两步**：先发 6 位邮箱确认码（`POST /api/auth/register` 返回 202 + `codeTtl`），验证码通过才写入 `users`，所以**没确认过的邮箱不会占号**；登录后在侧边栏底部「改密码」凭当前密码自行修改（作废其他设备的会话、当前设备保留）；用户名 / 邮箱 / 退出平时在侧边栏底部，侧边栏收起（手机端抽屉关闭）时挪到右上角顶部条；**新账号从空白开始**：不再自动生成「我的第一个表格」或任何示例数据，需要时自己在侧边栏新建表格 |
+| 用户管理 | 仅供 `ADMIN_EMAIL` 指定的超级管理员（首次登录自动创建 / 提升，见 [DEPLOY.md 6.6](./DEPLOY.md)）：侧边栏底部的「用户管理」面板支持按邮箱 / 昵称搜索 + 分页，显示建表数 / 协作者数 / 最近活跃时间，可改昵称与邮箱，也可一键重置密码（新密码邮件通知本人并作废其全部会话；重置自己时连当前会话一起失效，需重新登录）；**第一列是复选框**，勾选后可「删除选中」批量删除账号（连同他拥有的表格、记录、备注、上传文件一起清理；自己与其它管理员会被跳过并提示原因） |
 | 表格 | 多表格（Database）管理、图标/描述、**新建即空白表格**（只有「名称」字段，弹窗里不再让用户挑模板）、软删除归档 |
 | 字段 | 16 种字段类型（文本/数字/单选/多选/状态/日期/勾选/链接/邮箱/电话/附件/创建时间/更新时间/创建人/更新人），可重命名、改宽、拖动排序、类型转换时清洗数据；表头 `▾` 菜单支持「编辑 / 升序 / 降序 / 添加筛选 / 在右侧插入 / ← → 左右移动该列 / 隐藏字段 / 锁定字段 / 删除字段」；**升序 / 降序是单键排序**：视图里只保留一条排序规则，对某个字段升 / 降序会自动取消其他字段的排序，当前排序字段在表头显示 ↑ / ↓；表格末尾不再显示「＋ 字段」列，新增字段统一走表头 `▾` 菜单的「＋ 在右侧插入」 |
 | 记录 | 新建/编辑/删除、批量创建、批量删除、复制记录、分页（`limit`/`offset`，**滚动到底自动加载下一页**：表格 / 看板 / 画廊三种视图通用，原来表格右上角的「加载更多」按钮已移除）、乐观更新 + 失败回滚；行末的「复制记录 / 删除记录」操作列已移除，复制 / 删除统一走**批量操作栏（已选 N 条 / 复制 / 删除 / 取消选择）**，它显示在「＋ 新建筛选」后面的视图工具栏里；行首的方框列不再吸边，跟着表格一起左右滚动 |
@@ -25,7 +25,7 @@
 | 协作 | 成员分为 `editor`/`viewer`，所有者始终排在成员列表首位且不可被移除（邀请 / 改角色 / 移除的接口保留在后端，界面已移除管理入口） |
 | 实时同步 | **多人协作不用刷新页面**：每一次改动（改单元格 / 增删记录 / 新增备注 / 改结构）都会记一条带自增版本号的日志（`database_changes`），表格页开着的时候每 5 秒带 `?since=<rev>` 拉一次增量（`GET /api/databases/:id/changes`），只把别人改过的行就地合并进本地表格并**高亮闪一下变了的格子**，被删掉的行自动消失；记录卡片仍额外每 20 秒同步一次（`GET /api/records/:id`）。标签页切回前台时立刻补一次；本地正在写入时那一轮先跳过（不会把刚改的值顶回去）；服务端说改动太多 / 结构变了（`reset`）就整表重载一次。公开链接页（`/share/:token`）走同一套增量接口 `/api/public/:token/changes` |
 | 锁定 | 两层只读控制：**视图锁定**（名称 / 筛选 / 可见字段不可改，不可删除）、**字段锁定**（表头 `▾` 菜单里锁定，该字段所有记录只能查看，编辑与附件上传都会被服务端拒绝）。表级「表格锁定」已移除：`PATCH /api/databases/:id` 里的 `locked` 会被忽略，字段与视图结构只受访问权与定向分享限制 |
-| 分享 | **视图定向分享**：把单个视图（含它的筛选与可见字段）分享给已注册账号，打开面板的入口是视图工具栏的「分享」；公开链接 `/share/:token`（只读 / 可编辑、可设 7/30/90 天过期，写操作走 `/api/public/*`）接口保留，界面已移除生成入口。**限制编辑**（公开链接的 `limitEdits`、视图定向分享里的勾选项）下输入次数不限，只是每次保存成功（= 这一格有内容）后要等 **10 秒计时窗口**才会锁上：窗口内想改多少遍都行、每次保存重新计时；窗口一到且这一格仍有内容就只读；而在这 10 秒内把内容清空等于「没输入过」—— 记账一并删掉，之后可以重新输入、不受限制：服务端每次下发 `lockedCells`（已锁上）与 `cellEditGrace`（窗口截止时刻），前端据此显示剩余秒数并到点自动变只读 |
+| 分享 | **视图定向分享**：把单个视图（含它的筛选与可见字段）分享给已注册账号，打开面板的入口是视图工具栏的「分享」；公开链接 `/share/:token`（只读 / 可编辑、可设 7/30/90 天过期，写操作走 `/api/public/*`）接口保留，界面已移除生成入口。**限制编辑**（公开链接的 `limitEdits`、视图定向分享里的勾选项）下输入次数不限，只是每次保存成功（= 这一格有内容）后要等 **10 秒计时窗口**才会锁上：窗口内想改多少遍都行、每次保存重新计时；窗口一到且这一格仍有内容就只读；而在这 10 秒内把内容清空等于「没输入过」—— 记账一并删掉，之后可以重新输入、不受限制：服务端每次下发 `lockedCells`（已锁上）与 `cellEditGrace`（窗口截止时刻），前端据此显示剩余秒数并到点自动变只读。**邀请未注册邮箱**：把视图分享给还没有账号的邮箱时，界面弹出确认框，确认后发一封邀请邮件（链接 `/invite/<token>`，7 天内有效），对方点开只填昵称 + 密码就完成注册并自动获得这条视图分享（不需要邮箱确认码）；服务端对未注册邮箱返回 `404 email_not_registered`，只有带 `invite: true` 才会真的发出邀请 |
 | 附件 | 上传到 R2（默认上限 25MB，`MAX_UPLOAD_MB` 可调），元数据存 `files` 表 |
 | 备注 | 记录卡片底部的备注**只增不改**（后端不提供修改 / 删除备注的接口，输入框旁也有提示）；输入 `@` 可提醒协作者——**表格所有者、表格成员、以及被定向分享视图的访客**彼此之间都能互相 @（公开链接的匿名访客没有身份，不在此列）；被 @ 的人会在左上角收件箱（灰色单色图标 + 红点数字）收到一条私信，点开即已读并跳到那条备注（高亮定位）；**跳转时会先把这条记录同步到最新再打开卡片**（走 `GET /api/records/:id`，只取一条记录，不受分页限制），卡片开着期间每 20 秒、以及切回标签页时再同步一次，所以别人刚加的备注 / 刚改的单元格不用刷新页面就能看到；@ 不到自己与表格外的人，单条备注最多 50 人 |
 
@@ -38,20 +38,21 @@ src/
     index.ts   入口：路由分发、错误处理、静态资源
     http.ts    json/readJson/参数校验/错误构造等工具
     auth.ts    Cookie 会话、密码哈希、requireUser
-    admin.ts   超级管理员引导（ADMIN_EMAIL / ADMIN_PASSWORD）+ 用户列表查询
-    email.ts   Resend 发信（没配 RESEND_API_KEY / 发信失败都只记日志，不阻断流程）
+    admin.ts   超级管理员引导（ADMIN_EMAIL / ADMIN_PASSWORD）+ 用户列表查询 + 批量删除账号
+    email.ts   Resend 发信（确认码 / 重置密码 / 视图邀请；没配 RESEND_API_KEY 或发信失败都只记日志，不阻断流程）
     emailCodes.ts 注册邮箱确认码：发码（15 分钟有效、60 秒重发节流）、校验、清过期
+    invites.ts 视图分享邀请：签发 / 投递（邮件里 `/invite/<token>`）/ 接受后写入 view_shares
     access.ts  表格访问级别判定（view/edit/manage）
     changes.ts 多人协作的增量同步：改动日志（database_changes）+「自某个版本号起的改动」查询
     mappers.ts D1 行 -> API 类型
-    routes/    auth / admin / databases / properties / records / views / public / files / notes
+    routes/    auth / invites / admin / databases / properties / records / views / public / files / notes
   client/     React SPA
-    App.tsx            会话 + 表格列表 + `/share/:token` 路由
+    App.tsx            会话 + 表格列表 + `/share/:token`、`/invite/:token` 路由
     api.ts             fetch 封装（cookie、ApiError、typed 响应）
     components/        AuthPage Sidebar DatabasePage PublicPage TableGrid CardViews
                        Cell RecordDialog PropertyDialog ViewBar SharePanel Modal Popover
                        InboxButton UserChip FilterPanel ChangePasswordDialog
-                       AdminPanel ResetResultCard EditUserDialog
+                       InvitePage AdminPanel ResetResultCard EditUserDialog
     lib/viewEngine.ts  前端筛选/排序/分组计算
     lib/time.ts        相对时间 / 精确时间的格式化
     lib/cellEditLocks.ts  单元格「限制编辑」的 10 秒计时窗口（判定 / 倒计时 / 到点自动只读）
@@ -102,6 +103,8 @@ BASE_URL=https://cloudnotion.example.workers.dev node scripts/smoke-test.mjs
 - `users` / `sessions`：账号与会话（`sessions.token_hash` 唯一）；`users.is_admin = 1` = 超级管理员（由 `ADMIN_EMAIL` 引导写入），`sessions.last_seen_at` 供用户管理列表显示「最近活跃」
 - `email_codes`：注册邮箱确认码（`email` + 6 位 `code_hash`、`expires_at`、`consumed_at`、`attempts`、`sent_at` = 60 秒重发节流）。
   只存哈希：确认过的码不能重放；验证通过前**不会**写 `users`，所以未确认的邮箱不占号
+- `invites`：视图分享邀请（分享给**还没注册**的邮箱时写入：`token` 唯一、`email`、`database_id` + `view_id` + `role`/`limit_edits`、`expires_at`（默认 7 天）、`accepted_at`）。
+  邮件里的链接 `/invite/<token>` 被打开后填昵称 + 密码即完成注册，并把这条视图分享写进 `view_shares`；没接受的邀请不占邮箱、也不出现在用户列表里
 - `databases`：一张表格；`database_members`：受邀协作者（`role` = editor/viewer）
 - `properties`：字段定义（`type` + `config` JSON + `position` REAL 排序 + `is_locked` 字段级锁定）
 - `records`：一行记录，`"values"` 字段存 `{ 字段id: 值 }` JSON 文本，`position` REAL 排序
@@ -153,9 +156,14 @@ GET    /api/public/:token
 GET    /api/public/:token/changes          （公开链接页的增量同步，同一套逻辑）
 POST   /api/public/:token/records
 PATCH|DELETE /api/public/:token/records/:recordId
+GET    /api/invites/:token                 （受邀人打开邀请链接：表格 / 视图 / 邀请人）
+POST   /api/invites/:token/accept          （填昵称 + 密码完成注册，自动获得该视图分享）
+POST   /api/databases/:id/view-shares      （邮箱未注册时 404 email_not_registered；带 invite: true 改为发邀请链接）
+DELETE /api/view-shares/:id
 GET    /api/admin/users                    （超级管理员：用户列表 ?search=&limit=&offset=）
 PATCH  /api/admin/users/:id                （改昵称 / 邮箱，邮箱冲突 409）
 POST   /api/admin/users/:id/password       （重置密码：邮件通知 + 作废对方会话）
+POST   /api/admin/users/delete             （批量删除账号：连同其表格 / 上传文件一起清理）
 GET    /api/health
 ```
 

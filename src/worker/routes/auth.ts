@@ -39,7 +39,7 @@ import {
   type SqlRow,
 } from '../http';
 import type { Route, RequestContext, AuthedUser } from '../types';
-import { createStarterDatabase, listDatabases } from './databases';
+import { listDatabases } from './databases';
 
 function sessionResponse(user: AuthedUser | null) {
   return { user };
@@ -127,9 +127,8 @@ async function verifyRegistrationHandler(ctx: RequestContext): Promise<Response>
     .bind(userId, email, name, pending.passwordHash, now, now)
     .run();
 
-  // give every new account a small starter table (like Notion's onboarding page)
-  await createStarterDatabase(env, userId);
-
+  // 新账号不再自动生成「我的第一个表格」（也不写任何示例数据）：
+  // 注册完成后从空白开始，需要时用户在侧边栏自己新建表格。
   const { token } = await createSession(env, userId);
   return json(
     { user: { id: userId, email, name, isAdmin: false }, emailVerified: true },

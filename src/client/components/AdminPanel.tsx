@@ -1,10 +1,11 @@
 /**
  * 用户管理（超级管理员的「后台」页面）。
  *
- * 只做三件事：查看全部注册用户、修改注册信息（昵称 / 邮箱）、重置密码。
+ * 只做四件事：查看全部注册用户、修改注册信息（昵称 / 邮箱）、重置密码、
+ * 勾选第一列的复选框批量删除账号。
  * 权限在服务端（`/api/admin/*` 全部走 `requireAdmin`），这里只是入口的显隐。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdminUser, SessionUser } from '../../shared/types';
 import { ApiError, api } from '../api';
 import { EditUserDialog } from './EditUserDialog';
@@ -36,10 +37,16 @@ export function AdminPanel({ me, onToast, onReloadSession }: AdminPanelProps) {
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [busyId, setBusyId] = useState('');
   const [reset, setReset] = useState<ResetResult | null>(null);
+  /** 第一列勾选的账号 id（批量删除用） */
+  const [selected, setSelected] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
+    // 勾选状态只针对「当前这一页看到的账号」，重新加载时清空更安全
+    setSelected([]);
     try {
       const payload = await api.adminListUsers({ search, limit: PAGE_SIZE, offset });
       setUsers(payload.users);
@@ -54,6 +61,51 @@ export function AdminPanel({ me, onToast, onReloadSession }: AdminPanelProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 能勾选删除的账号：管理员账号与自己不能删（服务端同样会跳过） */
+  const selectable = users.filter((user) => !user.isAdmin && user.id !== me?.id);
+  const allSelected = selectable.length > 0 && selected.length === selectable.length;
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selected.length > 0 && selected.length < selectable.length;
+    }
+  }, [selected, selectable.length]);
+
+  const toggleOne = (id: string, checked: boolean) =>
+    setSelected((prev) => (checked ? [...prev, id] : prev.filter((item) => item !== id)));
+
+  /** 批量删除：连同账号自己创建的表格（记录 / 备注 / 上传文件）一起清理 */
+  const deleteSelected = async () => {
+    const targets = users.filter((user) => selected.includes(user.id));
+    if (!targets.length) return;
+    const names = targets.map((user) => user.name || user.email).join('、');
+    const confirmed = window.confirm(
+      `确定删除这 ${targets.length} 个账号吗？\n\n${names}\n\n他们自己创建的表格（含记录、备注、上传文件）会一并删除，且无法恢复。`,
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      const result = await api.adminDeleteUsers(targets.map((user) => user.id));
+      if (result.deleted.length) {
+        onToast(
+          `已删除 ${result.deleted.length} 个账号${
+            result.databaseCount ? `（连同 ${result.databaseCount} 张表格）` : ''
+          }`,
+        );
+      }
+      for (const item of result.skipped) {
+        onToast(`${item.email || item.id}：${item.reason}`, 'error');
+      }
+      setSelected([]);
+      await load();
+    } catch (cause) {
+      onToast(cause instanceof ApiError ? cause.message : '删除账号失败', 'error');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const resetPassword = async (user: AdminUser) => {
     if (!window.confirm(`确定要重置「${user.name || user.email}」的密码吗？该账号所有设备都会立即下线。`)) return;
@@ -120,6 +172,15 @@ export function AdminPanel({ me, onToast, onReloadSession }: AdminPanelProps) {
         <button type="button" className="btn ghost small" onClick={() => void load()} disabled={loading}>
           刷新
         </button>
+        <button
+          type="button"
+          className="btn ghost small"
+          disabled={deleting || !selected.length}
+          title="删除勾选的账号（连同他们创建的表格）"
+          onClick={() => void deleteSelected()}
+        >
+          {deleting ? '删除中…' : `删除选中${selected.length ? `（${selected.length}）` : ''}`}
+        </button>
       </div>
 
       {error ? <p className="error small">{error}</p> : null}
@@ -130,6 +191,19 @@ export function AdminPanel({ me, onToast, onReloadSession }: AdminPanelProps) {
         <table className="admin-table">
           <thead>
             <tr>
+              <th className="admin-select-col">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  aria-label="全选可删除的账号"
+                  title="全选本页可删除的账号"
+                  checked={allSelected}
+                  disabled={!selectable.length}
+                  onChange={(event) =>
+                    setSelected(event.target.checked ? selectable.map((user) => user.id) : [])
+                  }
+                />
+              </th>
               <th>用户</th>
               <th>角色</th>
               <th>表格</th>
@@ -141,6 +215,23 @@ export function AdminPanel({ me, onToast, onReloadSession }: AdminPanelProps) {
           <tbody>
             {users.map((user) => (
               <tr key={user.id}>
+                <td className="admin-select-col">
+                  {user.isAdmin || user.id === me?.id ? (
+                    <input
+                      type="checkbox"
+                      disabled
+                      title={user.isAdmin ? '管理员账号不能删除' : '不能删除自己的账号'}
+                    />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${user.email}`}
+                      checked={selected.includes(user.id)}
+                      disabled={deleting}
+                      onChange={(event) => toggleOne(user.id, event.target.checked)}
+                    />
+                  )}
+                </td>
                 <td>
                   <div className="row gap">
                     <div className="avatar small-avatar">{(user.name || user.email).slice(0, 1).toUpperCase()}</div>
@@ -180,7 +271,7 @@ export function AdminPanel({ me, onToast, onReloadSession }: AdminPanelProps) {
             ))}
             {!loading && users.length === 0 ? (
               <tr>
-                <td colSpan={6} className="muted small">
+                <td colSpan={7} className="muted small">
                   没有匹配的用户
                 </td>
               </tr>
