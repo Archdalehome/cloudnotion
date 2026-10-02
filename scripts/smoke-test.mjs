@@ -24,7 +24,10 @@
  * The admin section signs in with ADMIN_EMAIL / ADMIN_PASSWORD (defaults below
  * match the throw-away admin that CI writes into .dev.vars). When those
  * credentials do not exist on the target, the admin checks are skipped - not
- * failed - so the script stays usable against production.
+ * failed - so the script stays usable against production. The one destructive
+ * admin check (resetting your own password) only runs for disposable test
+ * admins on the reserved example.* domains; set SMOKE_ADMIN_SELF_RESET=1 to
+ * force it.
  */
 const BASE = (process.env.BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const PASSWORD = process.env.SMOKE_PASSWORD ?? 'Smoke1test';
@@ -33,6 +36,14 @@ const NEW_PASSWORD = process.env.SMOKE_NEW_PASSWORD ?? 'Smoke2test';
 /** 超级管理员（本地 e2e 由 CI 写进 .dev.vars；线上没配就跳过管理员断言） */
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL ?? 'admin@example.com').trim().toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'Smoke1admin';
+/**
+ * 「重置自己密码」那段会改密码并踢掉当前会话，所以只对用完即弃的测试管理员跑
+ * （`@example.com|org|net` 这类保留测试域）。线上用真实 ADMIN_EMAIL 时自动跳过，
+ * 免得把真实管理员的密码重置回 Secret 值、还顺手把他踢下线。
+ * 想强制跑：SMOKE_ADMIN_SELF_RESET=1。
+ */
+const DISPOSABLE_ADMIN =
+  /@example\.(com|org|net)$/i.test(ADMIN_EMAIL) || process.env.SMOKE_ADMIN_SELF_RESET === '1';
 
 let cookie = '';
 const checks = [];
@@ -1792,17 +1803,22 @@ async function main() {
     check('resetting an unknown user is a 404', unknownReset.status === 404, `status=${unknownReset.status}`);
 
     // 给自己重置：连自己当前的会话也一起作废，必须重新登录
+    // 只有测试管理员才真做 —— 真实管理员会被改密码（回写成 Secret 值）并踢下线
     const adminId = adminLogin.data?.user?.id;
-    const selfReset = adminId
-      ? await asAdmin(`/api/admin/users/${adminId}/password`, { method: 'POST', body: { password: ADMIN_PASSWORD } })
-      : { status: 0, data: null };
-    check(
-      'resetting your own password is flagged',
-      selfReset.status === 200 && selfReset.data?.resetSelf === true,
-      `status=${selfReset.status}`,
-    );
-    const afterSelfReset = await asAdmin('/api/session');
-    check('the self reset revokes the admin session', afterSelfReset.data?.user === null);
+    if (!DISPOSABLE_ADMIN) {
+      console.log(`  skip  self reset  (${ADMIN_EMAIL} 不是测试管理员，不动它的密码)`);
+    } else {
+      const selfReset = adminId
+        ? await asAdmin(`/api/admin/users/${adminId}/password`, { method: 'POST', body: { password: ADMIN_PASSWORD } })
+        : { status: 0, data: null };
+      check(
+        'resetting your own password is flagged',
+        selfReset.status === 200 && selfReset.data?.resetSelf === true,
+        `status=${selfReset.status}`,
+      );
+      const afterSelfReset = await asAdmin('/api/session');
+      check('the self reset revokes the admin session', afterSelfReset.data?.user === null);
+    }
   }
   cookie = ownerSession;
 
