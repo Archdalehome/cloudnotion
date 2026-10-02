@@ -287,6 +287,9 @@ jobs:
         if: steps.creds.outputs.ready == 'true' && inputs.skip_online_smoke != 'true'
         env:
           BASE_URL: ${{ steps.deploy.outputs.url }}
+          # 仓库配了管理员 Secrets 就用同一套账号验证线上「用户管理」（未配置时回落到冒烟测试默认值 → 该段自动 skip）
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL || 'admin@example.com' }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD || 'Smoke1admin' }}
         run: |
           set -euo pipefail
           if [ -z "${BASE_URL:-}" ]; then

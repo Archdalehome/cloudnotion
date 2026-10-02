@@ -78,7 +78,8 @@ npm run check:routes
 ```
 
 > 线上跑冒烟测试前，建议先在 Worker 上配好 `ADMIN_EMAIL` + `ADMIN_PASSWORD`（第 6.6 节）：
-> 配了就会连「用户管理」一起测；没配时这一段会自动 `skip`（其余断言照跑）。
+> 配了就会连「用户管理」一起测（工作流会把仓库里同名的 Secrets 透传给线上冒烟测试；未配置时回落到
+> `admin@example.com`，该段自动 `skip`，其余断言照跑）。
 > 另外注册/重置密码时只有**保留测试域**（`AUTH_ECHO_CODE_DOMAINS`）才会回显确认码，
 > 所以线上跑测试要么用 `@example.com` 这类测试邮箱，要么把测试域加到白名单。
 
