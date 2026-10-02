@@ -1663,9 +1663,17 @@ textarea.input {
     padding: 9px 8px;
   }
 
+  /* 手机上顶部两行（表格名行 .topbar / 视图名行 .viewbar）都必须保持单行：
+     行内字段一旦折行（名称框独占一行、记录数被挤成一列竖排……），
+     顶部高度会成倍增长，把表格内容整个往下压、一屏能看的行数骤减。
+     所以固定项不收缩，文字项「宁可 … 也不折行」。 */
+  .topbar,
+  .viewbar {
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+
   .topbar {
-    flex-wrap: wrap;
-    row-gap: 6px;
     min-height: 0;
     padding: 8px 10px;
   }
@@ -1680,9 +1688,34 @@ textarea.input {
     font-size: 16px;
   }
 
+  /* 名称框占满「同一行剩下的宽度」，而不是 width:100% 自己吃掉一整行、
+     把图标 / 角色徽标 / 成员数 / 删除表格全挤到下一行。
+     长表格名照旧「保头 + 末尾 …」（理由见 .title-input 的注释）。 */
   .title-input {
-    width: 100%;
+    width: auto;
+    flex: 1 1 auto;
     min-width: 0;
+  }
+
+  /* 图标、徽标、按钮、视图标签：宽度固定不参与收缩，保证认得出、点得到 */
+  .topbar .icon-input,
+  .topbar .badge,
+  .topbar .btn,
+  .viewbar .tab,
+  .viewbar .badge,
+  .viewbar .btn {
+    flex: 0 0 auto;
+  }
+
+  /* 「N 位成员 · M 条记录」「显示 x / 共 y 条 · 筛选 n」这类弱信息：
+     宽度不够时用省略号收掉，绝不折成竖排文字。 */
+  .topbar .small.muted,
+  .viewbar .small.muted {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .view-toolbar {
