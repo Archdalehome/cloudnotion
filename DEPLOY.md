@@ -71,6 +71,8 @@ npm run deploy                 # vite build && wrangler deploy
 
 ```bash
 # 冒烟测试（199 项断言，覆盖两步注册/登录/建表/记录/视图/分享/成员/附件/改密码/用户管理）
+# 线上跑同一套断言：唯一会改密码的「重置自己密码」只对 @example.* 测试管理员执行，
+# 真实 ADMIN_EMAIL 会自动跳过那 2 项（结果 197/197），不会重置你的密码、也不会踢你下线
 BASE_URL=https://cloudnotion.<your-subdomain>.workers.dev node scripts/smoke-test.mjs
 
 # 路由自检

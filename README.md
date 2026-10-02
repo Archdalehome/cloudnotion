@@ -166,7 +166,7 @@ GET    /api/health
 ```
 verify   npm ci -> npm run typecheck -> npm run check:routes -> vite build
 e2e      本地 D1 迁移 -> 写临时 .dev.vars（测试管理员 + 回显白名单）-> wrangler dev --local -> scripts/smoke-test.mjs（199 项断言）
-deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 同步可选 Secrets（邮件 / 管理员）-> 线上 199 项冒烟测试
+deploy   校验 D1 id -> 确保 R2 桶 -> 远程 D1 迁移 -> vite build -> wrangler deploy -> 同步可选 Secrets（邮件 / 管理员）-> 线上冒烟测试（本地那套 199 项断言；线上用真实 ADMIN_EMAIL 时自动跳过 2 项「改密码」断言）
 ```
 
 只需在仓库 `Settings → Secrets and variables → Actions` 配置：
