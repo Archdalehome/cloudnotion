@@ -471,6 +471,7 @@ export function App() {
         }}
         onInboxRefresh={() => void refreshInbox()}
         onInboxSelect={(message) => void openInboxMessage(message)}
+        onToast={toast}
       />
 
       {narrow && sidebarOpen ? (

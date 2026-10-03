@@ -44,15 +44,62 @@ export function capacityPercent(capacity: DatabaseCapacity): number {
   return Math.min(100, Math.round(capacityRatio(capacity) * 1000) / 10);
 }
 
-/** 进度条档位：`ok` 正常、`warn` 快满了（>= 80%）、`full` 已到上限 */
-export function capacityLevel(capacity: DatabaseCapacity): 'ok' | 'warn' | 'full' {
-  if (capacity.atCapacity) return 'full';
-  return capacityRatio(capacity) >= CAPACITY_WARN_RATIO ? 'warn' : 'ok';
+/** 进度条档位：`ok` 正常、`warn` 快满了（已用 >= 80%）、`full` 已到上限 */
+export function capacityLevelOfRatio(ratio: number): 'ok' | 'warn' | 'full' {
+  if (ratio >= 1) return 'full';
+  return ratio >= CAPACITY_WARN_RATIO ? 'warn' : 'ok';
+}
+
+/** 一侧容量的可画状态（侧边栏左右两条、提示框里的小条各用一份） */
+export interface CapacitySide {
+  /** 已用占上限的比例（0~1；历史数据超过上限时会 > 1） */
+  ratio: number;
+  /** 剩余占上限的比例（0~1，到上限 / 超限都是 0）——进度条画的就是它 */
+  remainingRatio: number;
+  /** 剩余量：记录数是条数、附件是字节（到上限为 0） */
+  remaining: number;
+  /** 上限 */
+  max: number;
+  /** 这一侧自己的档位（另一侧满了不会把它染红） */
+  level: 'ok' | 'warn' | 'full';
+}
+
+function sideOf(used: number, max: number): CapacitySide {
+  const ratio = ratioOf(used, max);
+  return {
+    ratio,
+    remainingRatio: Math.max(0, 1 - ratio),
+    remaining: Math.max(0, max - used),
+    max,
+    level: capacityLevelOfRatio(ratio),
+  };
+}
+
+/** 记录数那一侧（侧边栏双条的左半） */
+export function capacityRecordsSide(capacity: DatabaseCapacity): CapacitySide {
+  return sideOf(capacity.records, capacity.maxRecords);
+}
+
+/** 附件占用那一侧（侧边栏双条的右半） */
+export function capacityStorageSide(capacity: DatabaseCapacity): CapacitySide {
+  return sideOf(capacity.storageBytes, capacity.maxStorageBytes);
 }
 
 /** 用量明细（悬停提示的第一行 / 达到上限后的说明都用它） */
 export function capacityUsageSummary(capacity: DatabaseCapacity): string {
   return `记录 ${capacity.records}/${capacity.maxRecords} 条 · 附件 ${formatBytes(capacity.storageBytes)}/${formatBytes(capacity.maxStorageBytes)}`;
+}
+
+/** 容量提示框里「记录」那一行：`已用 12 / 500 条 · 剩余 488 条` */
+export function capacityRecordsUsageText(capacity: DatabaseCapacity): string {
+  return `已用 ${capacity.records} / ${capacity.maxRecords} 条 · 剩余 ${capacityRecordsSide(capacity).remaining} 条`;
+}
+
+/** 容量提示框里「附件」那一行：`已用 3.2 MB / 1 GB · 剩余 1016.8 MB` */
+export function capacityStorageUsageText(capacity: DatabaseCapacity): string {
+  return `已用 ${formatBytes(capacity.storageBytes)} / ${formatBytes(capacity.maxStorageBytes)} · 剩余 ${formatBytes(
+    capacityStorageSide(capacity).remaining,
+  )}`;
 }
 
 /** 悬停提示：用量明细 + 当前档位的说明 */

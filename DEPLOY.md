@@ -61,7 +61,7 @@ npm run deploy                 # vite build && wrangler deploy
 | `APP_NAME` | `Qafield` | 站点名称：前端标题 / 邮件标题 / 健康检查返回的名称 |
 | `MAX_UPLOAD_MB` | `25` | 单文件上传上限（MB） |
 | `MAX_DATABASE_RECORDS` | `500` | **单表**记录数上限。到上限后只拦「增长」：新建 / 批量新建 / 复制记录一律 `403 capacity_exceeded`，而查看、查询、改已有记录、删记录都不受影响（删掉一些立刻又能新建，见 [README 功能表](./README.md)） |
-| `MAX_DATABASE_STORAGE_MB` | `1024` | **单表**附件合计上限（MB，默认 1GB）。附件上传超过这个总量、或表格已经满员时同样返回 `403 capacity_exceeded`；侧边栏每张表后面的进度条显示的就是这两项用量 |
+| `MAX_DATABASE_STORAGE_MB` | `1024` | **单表**附件合计上限（MB，默认 1GB）。附件上传超过这个总量、或表格已经满员时同样返回 `403 capacity_exceeded`；侧边栏每张表后面的「剩余容量」双条（点开有明细浮层）显示的就是这两项用量 |
 | `ALLOW_SIGNUP` | `true` | 设为 `"false"` 关闭公开注册（已有账号仍可登录） |
 | `AUTH_CODE_TTL_MINUTES` | `15` | 注册邮箱确认码有效期（分钟） |
 | `AUTH_ECHO_CODE_DOMAINS` | `example.com,example.org,example.net` | 收件人域命中白名单时确认码**不发信**、直接回显在响应里（`devCode`）。这些都是永远收不到邮件的保留测试域，所以不会削弱真实邮箱的验证强度；另外只要没配 `RESEND_API_KEY`，任何邮箱都回显 |
