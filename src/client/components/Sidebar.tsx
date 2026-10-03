@@ -11,15 +11,30 @@ import {
   capacityTooltip,
   capacityUsageSummary,
 } from '../../shared/capacity';
-import type { DatabaseCapacity, DatabaseSummary, InboxMessage, SessionUser } from '../../shared/types';
+import {
+  MAX_PURCHASE_COUNT,
+  TABLE_QUOTA_RULES,
+  tableQuotaOf,
+  tableQuotaSummary,
+} from '../../shared/quota';
+import type {
+  DatabaseCapacity,
+  DatabaseSummary,
+  InboxMessage,
+  SessionUser,
+  TableQuota,
+} from '../../shared/types';
 import { ApiError } from '../api';
 import { InboxButton } from './InboxButton';
+import { Modal } from './Modal';
 import { UserChip } from './UserChip';
 
 interface SidebarProps {
   appName: string;
   user: SessionUser | null;
   databases: DatabaseSummary[];
+  /** 表格名额（还能再添加几张）：会话里与 `GET /api/quota` 下发 */
+  quota: TableQuota | null;
   activeId: string | null;
   /** 未读私信（收件箱左上角图标 + 红点数字） */
   inbox: InboxMessage[];
@@ -263,10 +278,58 @@ function CapacityMeter({
   );
 }
 
+/**
+ * 「表格数量说明」弹窗：讲清名额规则（新账号 1 个、每分享一次 +1、可以购买）+ 购买入口。
+ *
+ * 数量都是服务端下发的权威值（口径见 `src/shared/quota.ts`）。购买功能还没上线：
+ * 选好数量点「购买」只会提示一句「开发中」，不影响现有表格。
+ */
+function QuotaDialog({
+  quota,
+  onClose,
+  onBuy,
+}: {
+  quota: TableQuota;
+  onClose: () => void;
+  onBuy: (count: number) => void;
+}) {
+  const [count, setCount] = useState(1);
+  return (
+    <Modal title="表格数量说明" onClose={onClose}>
+      <p className="small muted quota-current">{tableQuotaSummary(quota)}</p>
+
+      <ul className="quota-rule-list">
+        {TABLE_QUOTA_RULES.map((rule) => (
+          <li key={rule}>{rule}</li>
+        ))}
+      </ul>
+
+      <div className="quota-buy">
+        <label className="field">
+          <span>购买数量</span>
+          <select className="input" value={count} onChange={(event) => setCount(Number(event.target.value))}>
+            {Array.from({ length: MAX_PURCHASE_COUNT }, (_, index) => index + 1).map((value) => (
+              <option key={value} value={value}>
+                {value} 个表格
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="btn primary" onClick={() => onBuy(count)}>
+          购买
+        </button>
+      </div>
+
+      <p className="small muted">购买功能还在开发中：现在点「购买」只会提示一句，不会扣费，也不影响已有表格。</p>
+    </Modal>
+  );
+}
+
 export function Sidebar({
   appName,
   user,
   databases,
+  quota,
   activeId,
   inbox,
   inboxUnread,
@@ -287,9 +350,16 @@ export function Sidebar({
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /** 「表格数量说明」弹窗：点「你有 N 个表格可以添加」里的 N 打开 */
+  const [quotaOpen, setQuotaOpen] = useState(false);
   /** 只通过视图定向分享拿到的表格：只出现在「分享表格」里，不再混进「我的表格」 */
   const sharedDatabases = databases.filter((database) => database.viewScoped);
   const myDatabases = databases.filter((database) => !database.viewScoped);
+  /**
+   * 名额：优先用服务端下发的权威值；万一还没拿到（离线 / 接口偶发失败），
+   * 就按「基础名额 - 已有表格」本地兜底，别让那句文案空着。
+   */
+  const quotaView = quota ?? tableQuotaOf({ used: myDatabases.length, shared: 0 });
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -340,36 +410,8 @@ export function Sidebar({
           <span>我的表格</span>
           <span className="spacer" />
           <span className="small muted">{myDatabases.length ? myDatabases.length : ''}</span>
-          <button type="button" className="icon-btn" title="新建表格" onClick={() => setCreating((prev) => !prev)}>
-            ＋
-          </button>
         </div>
       </div>
-
-      {/* 新建表格固定落成空白表格（只有「名称」字段），不再让用户挑模板 */}
-      {creating ? (
-        <form onSubmit={submit} style={{ padding: '0 12px 8px' }}>
-          <label className="field">
-            <span>表格名称</span>
-            <input
-              className="input"
-              value={name}
-              autoFocus
-              onChange={(event) => setName(event.target.value)}
-              placeholder="例如：项目排期"
-            />
-          </label>
-          {error ? <p className="error small">{error}</p> : null}
-          <div className="row gap">
-            <button className="btn primary small" type="submit" disabled={busy || !name.trim()}>
-              {busy ? '创建中…' : '创建'}
-            </button>
-            <button className="btn ghost small" type="button" onClick={() => setCreating(false)}>
-              取消
-            </button>
-          </div>
-        </form>
-      ) : null}
 
       <div className="sidebar-list">
         {myDatabases.length ? (
@@ -397,9 +439,59 @@ export function Sidebar({
           ))
         ) : (
           <p className="small muted" style={{ padding: '0 12px' }}>
-            还没有表格，点击右上角 ＋ 新建。
+            还没有表格，点击下方「添加表格」新建。
           </p>
         )}
+      </div>
+
+      {/* 「添加表格」从标题行移到列表下方：先是名额说明，再是按钮与新建表单 */}
+      <div className="sidebar-add">
+        <p className="sidebar-add-note">
+          你有
+          <button
+            type="button"
+            className="quota-count"
+            title="表格数量规则与购买"
+            aria-label={`还可以添加 ${quotaView.remaining} 个表格，点击查看数量说明`}
+            onClick={() => setQuotaOpen(true)}
+          >
+            {quotaView.remaining}
+          </button>
+          个表格可以添加，点击「添加表格」按钮可以添加表格。
+        </p>
+        <button
+          type="button"
+          className="btn primary small sidebar-add-btn"
+          title={creating ? '收起新建表格表单' : '新建表格'}
+          onClick={() => setCreating((prev) => !prev)}
+        >
+          ＋ 添加表格
+        </button>
+
+        {/* 新建表格固定落成空白表格（只有「名称」字段），不再让用户挑模板 */}
+        {creating ? (
+          <form onSubmit={submit} className="sidebar-add-form">
+            <label className="field">
+              <span>表格名称</span>
+              <input
+                className="input"
+                value={name}
+                autoFocus
+                onChange={(event) => setName(event.target.value)}
+                placeholder="例如：项目排期"
+              />
+            </label>
+            {error ? <p className="error small">{error}</p> : null}
+            <div className="row gap">
+              <button className="btn primary small" type="submit" disabled={busy || !name.trim()}>
+                {busy ? '创建中…' : '创建'}
+              </button>
+              <button className="btn ghost small" type="button" onClick={() => setCreating(false)}>
+                取消
+              </button>
+            </div>
+          </form>
+        ) : null}
       </div>
 
       <div className="sidebar-section">
@@ -454,6 +546,14 @@ export function Sidebar({
             </button>
           </div>
         </>
+      ) : null}
+
+      {quotaOpen ? (
+        <QuotaDialog
+          quota={quotaView}
+          onClose={() => setQuotaOpen(false)}
+          onBuy={(count) => onToast(`购买 ${count} 个表格的功能还在开发中，敬请期待`)}
+        />
       ) : null}
 
       <div className="sidebar-foot">

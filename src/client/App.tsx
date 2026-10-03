@@ -3,7 +3,14 @@
  * database page) and the public share route (`/share/:token`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DatabaseDetail, DatabaseSummary, InboxMessage, InboxResponse, SessionUser } from '../shared/types';
+import type {
+  DatabaseDetail,
+  DatabaseSummary,
+  InboxMessage,
+  InboxResponse,
+  SessionUser,
+  TableQuota,
+} from '../shared/types';
 import { ApiError, api, setSessionToken, type SessionPayload } from './api';
 import { AdminPanel } from './components/AdminPanel';
 import { AuthPage } from './components/AuthPage';
@@ -105,6 +112,8 @@ export function App() {
   const [appName, setAppName] = useState('Qafield');
   const [user, setUser] = useState<SessionUser | null>(null);
   const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  /** 表格名额（还能再添加几张表格）：侧边栏底部显示，登录与刷新列表时更新 */
+  const [quota, setQuota] = useState<TableQuota | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DatabaseDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -181,6 +190,8 @@ export function App() {
         setAppName(payload.appName);
         setUser(payload.user);
         setDatabases(payload.databases);
+        // 会话里带着名额：侧边栏一进来就能显示「还能添加几个表格」
+        setQuota(payload.quota);
         if (payload.user && payload.databases.length) {
           setActiveId((prev) =>
             prev && payload.databases.some((item) => item.id === prev) ? prev : payload.databases[0].id,
@@ -195,6 +206,7 @@ export function App() {
           setSessionToken(null);
           setUser(null);
           setDatabases([]);
+          setQuota(null);
           setSessionError('');
           return null;
         }
@@ -224,6 +236,7 @@ export function App() {
       setSessionToken(null);
       setUser(null);
       setDatabases([]);
+      setQuota(null);
       return true;
     } catch {
       // 连问都问不到：更像网络问题，保留当前界面不要把人踢出去
@@ -341,8 +354,15 @@ export function App() {
 
   const refreshList = useCallback(async () => {
     try {
-      const result = await api.listDatabases();
+      // 列表和名额一起刷新：分享出去一张表（名额 +1）、删掉一张表（名额 -1）后
+      // 侧边栏底部的数字要跟着变
+      const [result, nextQuota] = await Promise.all([
+        api.listDatabases(),
+        // 名额拿不到不影响列表刷新（沿用上一次的数字）
+        api.quota().catch(() => null),
+      ]);
       setDatabases(result.databases);
+      if (nextQuota) setQuota(nextQuota.quota);
     } catch {
       // the list refresh is best effort only
     }
@@ -357,6 +377,12 @@ export function App() {
       setActiveId(created.id);
       if (narrow) setSidebarOpen(false);
       toast(`已创建「${created.name}」`);
+      // 新建表格会占掉一个名额：顺手刷新侧边栏底部的「还能添加几个」
+      void api
+        .quota()
+        .then((next) => setQuota(next.quota))
+        // 名额只是提示，拿不到就沿用上一次的数字
+        .catch(() => undefined);
     },
     [narrow, toast],
   );
@@ -369,6 +395,7 @@ export function App() {
     }
     setUser(null);
     setDatabases([]);
+    setQuota(null);
     setActiveId(null);
     setDetail(null);
     setDetailError('');
@@ -447,6 +474,7 @@ export function App() {
         appName={appName}
         user={user}
         databases={databases}
+        quota={quota}
         activeId={activeId}
         inbox={inbox.messages}
         inboxUnread={inbox.unread}

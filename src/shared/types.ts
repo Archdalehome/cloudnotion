@@ -333,6 +333,28 @@ export interface DatabaseCapacity {
   atCapacity: boolean;
 }
 
+/**
+ * 表格名额：这个账号还能再添加几张表格（侧边栏「你有 N 个表格可以添加」里的 N）。
+ *
+ * 口径（计算见 `src/shared/quota.ts`，服务端在 `GET /api/quota` 里下发）：
+ *   - 新注册账号 1 个名额；
+ *   - 每分享一次表格（视图定向分享 / 公开链接 / 协作者）多 1 个；
+ *   - 购买名额（购买功能还没上线，暂时恒为 0）。
+ * 「已用」只算自己拥有的、未归档的表格，别人分享给你的表不算。
+ */
+export interface TableQuota {
+  /** 已拥有的表格数（不含归档） */
+  used: number;
+  /** 已分享出去的次数：视图定向分享 / 公开链接 / 协作者，各算一次 */
+  shared: number;
+  /** 通过购买得到的额外名额（购买功能还没上线，恒为 0） */
+  purchased: number;
+  /** 总名额 = 基础 1 + 分享次数 + 已购买 */
+  total: number;
+  /** 还能再添加几张（用完为 0，不会出现负数） */
+  remaining: number;
+}
+
 export interface DatabaseSummary {
   id: string;
   name: string;

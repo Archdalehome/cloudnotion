@@ -28,6 +28,7 @@ import type {
   RowRecord,
   RowValues,
   SessionUser,
+  TableQuota,
   VerifyRegistrationResponse,
   ViewConfig,
   ViewDef,
@@ -38,6 +39,8 @@ import type {
 export interface SessionPayload {
   user: SessionUser | null;
   databases: DatabaseSummary[];
+  /** 表格名额（还能再添加几张）：登录后侧边栏底部直接就有数字可用 */
+  quota: TableQuota | null;
   maxUploadMb: number;
   appName: string;
 }
@@ -209,6 +212,8 @@ export const api = {
   acceptInvite: (token: string, body: { name: string; password: string; tokenInBody?: boolean }) =>
     json<InviteAcceptResponse>(`/api/invites/${encodeURIComponent(token)}/accept`, 'POST', body),
 
+  /** 表格名额（还能再添加几张）：侧边栏底部的数字 + 数量说明弹窗 */
+  quota: () => json<{ quota: TableQuota }>('/api/quota', 'GET'),
   listDatabases: () => json<{ databases: DatabaseSummary[] }>('/api/databases', 'GET'),
   createDatabase: (body: { name: string; icon?: string; description?: string; templateId?: string }) =>
     json<DatabaseDetail>('/api/databases', 'POST', body),

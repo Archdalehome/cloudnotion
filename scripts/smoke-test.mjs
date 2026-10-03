@@ -1936,6 +1936,55 @@ async function main() {
     check('cleanup the capacity table', removedCapTable.data?.ok === true, `status=${removedCapTable.status}`);
   }
 
+  // -------------------------------------------- 表格名额（GET /api/quota）
+  section('table quota (表格名额)');
+  const quotaBefore = await call('/api/quota');
+  const beforeQuota = quotaBefore.data?.quota;
+  check(
+    'the owner can read the table quota',
+    quotaBefore.status === 200 &&
+      beforeQuota?.total === (beforeQuota?.shared ?? 0) + (beforeQuota?.purchased ?? 0) + 1 &&
+      beforeQuota?.remaining === Math.max(0, (beforeQuota?.total ?? 0) - (beforeQuota?.used ?? 0)),
+    `used=${beforeQuota?.used} shared=${beforeQuota?.shared} total=${beforeQuota?.total} remaining=${beforeQuota?.remaining}`,
+  );
+
+  const quotaTable = await call('/api/databases', { method: 'POST', body: { name: '名额测试表' } });
+  const afterCreate = (await call('/api/quota')).data?.quota;
+  check(
+    'adding a table spends one slot',
+    quotaTable.status === 201 &&
+      afterCreate?.used === (beforeQuota?.used ?? 0) + 1 &&
+      afterCreate?.remaining === Math.max(0, (beforeQuota?.remaining ?? 0) - 1),
+    `used=${beforeQuota?.used}->${afterCreate?.used} remaining=${beforeQuota?.remaining}->${afterCreate?.remaining}`,
+  );
+
+  // 分享出去一次（公开链接）就多一个可添加的名额
+  const quotaShare = await call(`/api/databases/${quotaTable.data?.id}/shares`, {
+    method: 'POST',
+    body: { permission: 'view' },
+  });
+  const afterShare = (await call('/api/quota')).data?.quota;
+  check(
+    'sharing a table grants one more slot',
+    quotaShare.status === 201 &&
+      afterShare?.shared === (afterCreate?.shared ?? 0) + 1 &&
+      afterShare?.total === (afterCreate?.total ?? 0) + 1 &&
+      afterShare?.remaining === (afterCreate?.remaining ?? 0) + 1,
+    `shared=${afterCreate?.shared}->${afterShare?.shared} remaining=${afterCreate?.remaining}->${afterShare?.remaining}`,
+  );
+
+  // 清理：删掉分享链接与这张测试表，别给后面的段落留下干扰
+  await call(`/api/shares/${(quotaShare.data?.shares ?? [])[0]?.id}`, { method: 'DELETE' });
+  const removedQuotaTable = await call(`/api/databases/${quotaTable.data?.id}`, { method: 'DELETE' });
+  const settledQuota = (await call('/api/quota')).data?.quota;
+  check(
+    'removing the test table and its link restores the quota',
+    removedQuotaTable.data?.ok === true &&
+      settledQuota?.used === beforeQuota?.used &&
+      settledQuota?.shared === beforeQuota?.shared,
+    `used=${settledQuota?.used} shared=${settledQuota?.shared}`,
+  );
+
   // ------------------------------------------------------------------ cleanup
   // ------------------------------------------------- 改密码（登录后自助修改）
   section('password change');

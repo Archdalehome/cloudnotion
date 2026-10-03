@@ -941,6 +941,12 @@ export function DatabasePage({
 
   const applyViewShares = (next: ViewShare[]) => setDetail((prev) => ({ ...prev, viewShares: next }));
 
+  /** 分享 / 取消分享一个视图之后：顺手刷新侧边栏（表格名额会跟着 ±1） */
+  const applyViewSharesAndReload = (next: ViewShare[]) => {
+    applyViewShares(next);
+    onReloadList();
+  };
+
   /* ----------------------------------------------------------------- render */
 
   const boardGroupProperty = activeView?.config.groupBy
@@ -1189,7 +1195,7 @@ export function DatabasePage({
             setShareViewId(null);
           }}
           onToast={onToast}
-          onViewShares={applyViewShares}
+          onViewShares={applyViewSharesAndReload}
         />
       ) : null}
     </section>

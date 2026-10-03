@@ -45,6 +45,7 @@ import {
 } from '../http';
 import type { Route, RequestContext, AuthedUser } from '../types';
 import { listDatabases } from './databases';
+import { loadTableQuota } from './quota';
 
 function sessionResponse(user: AuthedUser | null) {
   return { user };
@@ -239,14 +240,21 @@ async function sessionHandler(ctx: RequestContext): Promise<Response> {
     return json({
       ...sessionResponse(null),
       databases: [],
+      // 没登录就没有名额可谈（客户端只在有 `user` 时才读它）
+      quota: null,
       maxUploadMb: Number(ctx.env.MAX_UPLOAD_MB ?? 25),
       appName: ctx.env.APP_NAME ?? 'Qafield',
     });
   }
-  const databases = await listDatabases(ctx.env, user.id);
+  // 表格列表与表格名额一起下发：侧边栏底部要显示「还能添加几张表格」
+  const [databases, quota] = await Promise.all([
+    listDatabases(ctx.env, user.id),
+    loadTableQuota(ctx.env, user.id),
+  ]);
   return json({
     ...sessionResponse(user),
     databases,
+    quota,
     maxUploadMb: Number(ctx.env.MAX_UPLOAD_MB ?? 25),
     appName: ctx.env.APP_NAME ?? 'Qafield',
   });

@@ -355,6 +355,82 @@ textarea.input {
   white-space: nowrap;
 }
 
+/* 「添加表格」区（表格列表下方）：名额说明 + 按钮 + 新建表单 */
+.sidebar-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-add-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-soft);
+}
+
+/* 「你有 N 个表格可以添加」里的 N：点开是数量规则 + 购买入口 */
+.quota-count {
+  margin: 0 2px;
+  padding: 0 7px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.quota-count:hover {
+  filter: brightness(0.97);
+}
+
+.quota-count:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-add-btn {
+  align-self: flex-start;
+}
+
+.sidebar-add-form {
+  margin: 0;
+}
+
+/* 「表格数量说明」弹窗：现状 + 规则列表 + 购买区 */
+.quota-current {
+  margin: 0 0 8px;
+}
+
+.quota-rule-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-soft);
+}
+
+.quota-rule-list li + li {
+  margin-top: 2px;
+}
+
+.quota-buy {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.quota-buy .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
 .sidebar-foot {
   border-top: 1px solid var(--border);
   padding: 8px;

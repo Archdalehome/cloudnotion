@@ -15,6 +15,7 @@ import { inviteRoutes } from './routes/invites';
 import { noteRoutes } from './routes/notes';
 import { propertyRoutes } from './routes/properties';
 import { publicRoutes } from './routes/public';
+import { quotaRoutes } from './routes/quota';
 import { recordRoutes } from './routes/records';
 import { viewRoutes } from './routes/views';
 import type { Env, RequestContext, Route, RouteHandler } from './types';
@@ -23,6 +24,7 @@ const API_ROUTES: Route[] = [
   ...authRoutes,
   ...inviteRoutes,
   ...adminRoutes,
+  ...quotaRoutes,
   ...databaseRoutes,
   ...propertyRoutes,
   ...recordRoutes,
