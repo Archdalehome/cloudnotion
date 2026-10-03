@@ -355,7 +355,7 @@ textarea.input {
   white-space: nowrap;
 }
 
-/* 「添加表格」区（在「我的表格」上方）：名额说明 + 添加按钮 + 新建表单 */
+/* 「添加表格」区（在「我的表格」上方）：名额说明 + 添加按钮（同一行）+ 新建表单 */
 .sidebar-add {
   display: flex;
   flex-direction: column;
@@ -364,7 +364,17 @@ textarea.input {
   border-bottom: 1px solid var(--border);
 }
 
+/* 说明文字与「添加」按钮同一行：窄屏放不下时按钮自动换到下一行 */
+.sidebar-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .sidebar-add-note {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: 12px;
   line-height: 1.7;
@@ -394,8 +404,10 @@ textarea.input {
   outline-offset: 1px;
 }
 
+/* 按钮不跟着文字拉伸，也不被压扁 / 折行 */
 .sidebar-add-btn {
-  align-self: flex-start;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .sidebar-add-form {

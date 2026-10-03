@@ -409,30 +409,33 @@ export function Sidebar({
 
       {/* 「添加表格」区（在「我的表格」上方）：名额说明 + 添加按钮 + 新建表单 */}
       <div className="sidebar-add">
-        <p className="sidebar-add-note">
-          你有
+        {/* 名额说明与「添加」按钮同一行 */}
+        <div className="sidebar-add-row">
+          <p className="sidebar-add-note">
+            你有
+            <button
+              type="button"
+              className="quota-count"
+              title="表格数量规则与购买"
+              aria-label={`还可以添加 ${quotaView.remaining} 个表格，点击查看数量说明`}
+              onClick={() => setQuotaOpen(true)}
+            >
+              {quotaView.remaining}
+            </button>
+            个表格可以
+          </p>
           <button
             type="button"
-            className="quota-count"
-            title="表格数量规则与购买"
-            aria-label={`还可以添加 ${quotaView.remaining} 个表格，点击查看数量说明`}
-            onClick={() => setQuotaOpen(true)}
+            className="btn primary small sidebar-add-btn"
+            title={
+              addDisabled ? '名额已用完，点数字看看规则与购买' : creating ? '收起新建表格表单' : '新建表格'
+            }
+            disabled={addDisabled}
+            onClick={() => setCreating((prev) => !prev)}
           >
-            {quotaView.remaining}
+            添加
           </button>
-          个表格可以
-        </p>
-        <button
-          type="button"
-          className="btn primary small sidebar-add-btn"
-          title={
-            addDisabled ? '名额已用完，点上面的数字看看规则与购买' : creating ? '收起新建表格表单' : '新建表格'
-          }
-          disabled={addDisabled}
-          onClick={() => setCreating((prev) => !prev)}
-        >
-          添加
-        </button>
+        </div>
 
         {/* 新建表格固定落成空白表格（只有「名称」字段），不再让用户挑模板 */}
         {creating && !addDisabled ? (
