@@ -5,6 +5,10 @@ export interface Env {
   ASSETS: Fetcher;
   APP_NAME?: string;
   MAX_UPLOAD_MB?: string;
+  /** 单张表格的记录数上限（默认 500）：到上限后只能查看 / 查询，不再接受新增 */
+  MAX_DATABASE_RECORDS?: string;
+  /** 单张表格的附件总容量上限，单位 MB（默认 1024 = 1GB） */
+  MAX_DATABASE_STORAGE_MB?: string;
   ALLOW_SIGNUP?: string;
   /** Resend API Key（secret，`npx wrangler secret put RESEND_API_KEY`）；不配则注册确认码直接回显 */
   RESEND_API_KEY?: string;

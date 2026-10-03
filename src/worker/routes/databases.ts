@@ -13,6 +13,13 @@ import { rowMatchesView } from '../../shared/viewFilter';
 import { defaultViewConfig } from '../../shared/views';
 import { requireDatabaseAccess, type DatabaseAccess } from '../access';
 import { requireUser } from '../auth';
+import {
+  capacityFromUsage,
+  capacityLimits,
+  DATABASE_USAGE_SELECT,
+  loadDatabaseCapacity,
+  usageFromRow,
+} from '../capacity';
 import { loadCellEditLocks, memberCellEditKey } from '../cellEdits';
 import { headRev, loadChanges, logChanges } from '../changes';
 import {
@@ -67,7 +74,7 @@ export async function listDatabases(env: Env, userId: string): Promise<DatabaseS
     env.DB.prepare(
       `SELECT d.id, d.name, d.icon, d.description, d.owner_id, d.is_locked, d.created_at, d.updated_at,
               u.name AS owner_name,
-              (SELECT COUNT(*) FROM records r WHERE r.database_id = d.id AND r.is_archived = 0) AS record_count,
+              ${DATABASE_USAGE_SELECT},
               CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS is_member,
               CASE WHEN d.owner_id = ? THEN 'owner'
                    ELSE COALESCE(m.role, s.role, 'viewer') END AS role
@@ -99,6 +106,7 @@ export async function listDatabases(env: Env, userId: string): Promise<DatabaseS
     sharedViewNames.set(databaseId, list);
   }
 
+  const limits = capacityLimits(env);
   return (results ?? []).map((row) => {
     const role = sqlString(row, 'role', 'viewer') as Role;
     // 结果集只包含「所有者 / 表格成员 / 视图定向分享」三种来源：
@@ -109,6 +117,8 @@ export async function listDatabases(env: Env, userId: string): Promise<DatabaseS
       role,
       sharedViewNames.get(sqlString(row, 'id')) ?? [],
       viewScoped,
+      // 记录数 + 附件占用：和表格在同一个查询里算出来，避免一张表一次往返
+      capacityFromUsage(usageFromRow(row), limits),
     );
   });
 }
@@ -447,6 +457,8 @@ export async function buildDatabaseDetail(
     env,
     page.rows.map((item) => item.id),
   );
+  // 单表容量用量：表格页顶部据此显示「已满，只能查看」的提示条
+  const capacity = await loadDatabaseCapacity(env, databaseId);
 
   return {
     id: databaseId,
@@ -455,6 +467,7 @@ export async function buildDatabaseDetail(
     description: sqlString(row, 'description'),
     ownerId: sqlString(row, 'owner_id'),
     role: access.role,
+    capacity,
     // 表级锁定已移除：字段保留（客户端类型仍需要它），恒为 false
     locked: false,
     viewScoped: scoped,

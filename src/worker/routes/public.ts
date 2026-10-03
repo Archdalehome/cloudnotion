@@ -9,6 +9,7 @@ import {
   shareCellEditKey,
 } from '../cellEdits';
 import { headRev, loadChanges, logChanges } from '../changes';
+import { assertDatabaseCanGrow, loadDatabaseCapacity } from '../capacity';
 import {
   asNumberValue,
   badRequest,
@@ -53,11 +54,13 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
   // 增量同步的起点：先读版本号、再读数据（写入顺序是「先数据、后日志」）
   const rev = await headRev(ctx.env);
 
-  const [properties, views, rows, total] = await Promise.all([
+  const [properties, views, rows, total, capacity] = await Promise.all([
     loadProperties(ctx.env, share.databaseId),
     loadViews(ctx.env, share.databaseId),
     loadRecords(ctx.env, share.databaseId, limit, offset),
     countRecords(ctx.env, share.databaseId),
+    // 单表容量用量：公开链接页到上限后也只剩「查看和查询」
+    loadDatabaseCapacity(ctx.env, share.databaseId),
   ]);
   // 公开链接也要能显示「创建人 / 最后编辑人」的姓名（表格所有者 + 协作者）
   const people = await loadPeopleNames(ctx.env, rows);
@@ -80,6 +83,7 @@ async function publicDatabaseHandler(ctx: RequestContext): Promise<Response> {
       limitEdits: share.limitEdits,
       ownerId: sqlString(row, 'owner_id'),
       ownerName: sqlString(row, 'owner_name'),
+      capacity,
     },
     properties,
     views,
@@ -99,6 +103,8 @@ async function publicCreateRecordHandler(ctx: RequestContext): Promise<Response>
   const body = await readJson(ctx.request);
   const properties = await loadProperties(ctx.env, share.databaseId);
   if (!properties.length) throw badRequest('该表格还没有字段');
+  // 容量满了只拦增长：公开链接页也不能再新增记录（改 / 删已有记录照常）
+  await assertDatabaseCanGrow(ctx.env, share.databaseId, { rows: 1 });
 
   const values = await withDefaultStatus(
     ctx.env,

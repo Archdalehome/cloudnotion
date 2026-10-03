@@ -3,6 +3,7 @@ import { cellLockHint } from '../../shared/fields';
 import type { FileValue } from '../../shared/types';
 import { requireDatabaseAccess, resolveShareToken } from '../access';
 import { getCurrentUser, requireUser } from '../auth';
+import { assertDatabaseCanGrow } from '../capacity';
 import { isCellLocked, memberCellEditKey, shareCellEditKey } from '../cellEdits';
 import { logChanges } from '../changes';
 import {
@@ -94,6 +95,9 @@ async function uploadHandler(ctx: RequestContext): Promise<Response> {
       throw forbidden(cellLockHint(sqlString(property, 'name')));
     }
   }
+
+  // 附件容量按「表」统计：到上限后不再接受新的上传（已有文件照常下载 / 删除）
+  if (databaseId) await assertDatabaseCanGrow(ctx.env, databaseId, { bytes: file.size });
 
   const fileId = newId();
   const name = safeFileName(asString(file.name, '文件名', { max: 200 }) || 'file');

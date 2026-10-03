@@ -369,6 +369,55 @@ textarea.input {
   font-weight: 600;
 }
 
+/* ------------------------------------------------- 单表容量（记录数 / 附件） */
+
+/* 侧边栏里每张表后面的细进度条：取记录数 / 附件占用里更紧张的那个维度 */
+.capacity-meter {
+  flex: none;
+  width: 40px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.capacity-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.18s ease;
+}
+
+/* >= 80%：转黄提醒「快满了」 */
+.capacity-meter.warn .capacity-meter-fill {
+  background: #d9a02b;
+}
+
+/* 到上限：转红；侧边栏那一行还会多一个「已满」小标签 */
+.capacity-meter.full .capacity-meter-fill {
+  background: var(--danger);
+}
+
+.capacity-full-tag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+/* 表格页 / 公开链接页顶部的提示条：已到上限，只能查看和查询 */
+.capacity-notice {
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #fdf4f4;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ---------------------------------------------------------------- top bar */
 
 .topbar {

@@ -94,6 +94,7 @@ function summaryOf(detail: DatabaseDetail): DatabaseSummary {
     createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,
     rowCount: detail.total,
+    capacity: detail.capacity,
   };
 }
 

@@ -13,6 +13,7 @@
  * (create/update/duplicate/delete) -> views -> share links -> public read +
  * edit -> members -> notes + @mention inbox -> view invites (邀请未注册邮箱)
  * -> password change -> admin panel (含批量删除账号) -> file upload ->
+ * capacity limits (记录数 / 附件到上限后只拦增长) ->
  * cleanup. Exit code is 1 when any check fails.
  *
  * Signup needs the 6-digit code that the API emails out. To keep this runnable
@@ -1799,6 +1800,140 @@ async function main() {
     const download = await fetch(`${BASE}/api/files/${fileId}`, { headers: { cookie } });
     const text = await download.text();
     check('download file', download.ok && text === 'qafield smoke test', `status=${download.status}`);
+  }
+
+  // ---------------------------------------------------------------- capacity
+  // 单表容量：记录数（默认 500）/ 附件占用（默认 1GB）到上限后**只拦增长** ——
+  // 新建记录、批量新建、复制记录、上传附件会被 403 capacity_exceeded 挡下；
+  // 查看、查询、编辑已有记录、删除记录都照常。上限从接口读，本地与线上跑同一套断言。
+  section('capacity limits (只拦增长)');
+  const capSession = await call('/api/session');
+  const capSummary = (capSession.data?.databases ?? []).find((item) => item.id === databaseId);
+  const cap = capSummary?.capacity;
+  check(
+    'session exposes per-table capacity',
+    typeof cap?.maxRecords === 'number' && cap.maxRecords > 0 && typeof cap?.maxStorageBytes === 'number',
+    `records=${cap?.records}/${cap?.maxRecords} storage=${cap?.storageBytes}/${cap?.maxStorageBytes}`,
+  );
+  const capRows = await call(`/api/databases/${databaseId}/rows?limit=1`);
+  check(
+    'record usage matches the table',
+    cap?.records === capRows.data?.total,
+    `capacity=${cap?.records} rows=${capRows.data?.total}`,
+  );
+  check('storage usage counts uploaded attachments', (cap?.storageBytes ?? 0) > 0, `${cap?.storageBytes} bytes`);
+  const capDetail = await call(`/api/databases/${databaseId}`);
+  check(
+    'table detail exposes the same capacity',
+    capDetail.data?.capacity?.maxRecords === cap?.maxRecords && capDetail.data?.capacity?.atCapacity === false,
+    `maxRecords=${capDetail.data?.capacity?.maxRecords} atCapacity=${capDetail.data?.capacity?.atCapacity}`,
+  );
+
+  // 专门用来把「已满」这个状态跑出来的临时表格：上限由环境变量决定，所以按
+  // 接口下发的 maxRecords 灌满（一次 200 行，和批量接口的上限一致）。
+  const capTable = await call('/api/databases', { method: 'POST', body: { name: 'Smoke 容量表' } });
+  const capTableId = capTable.data?.id;
+  const capFieldId = (capTable.data?.properties ?? [])[0]?.id;
+  const maxRecords = cap?.maxRecords ?? 0;
+  if (
+    check(
+      'temp table for the capacity checks',
+      Boolean(capTableId && capFieldId) && maxRecords > 0 && maxRecords <= 2000,
+      `status=${capTable.status} maxRecords=${maxRecords}`,
+    )
+  ) {
+    let filled = 0;
+    while (filled < maxRecords) {
+      const batch = Math.min(200, maxRecords - filled);
+      const created = await call(`/api/databases/${capTableId}/records/bulk`, {
+        method: 'POST',
+        body: {
+          records: Array.from({ length: batch }, (_, index) => ({ [capFieldId]: `容量 ${filled + index + 1}` })),
+        },
+      });
+      if (created.status !== 201) break;
+      filled += batch;
+    }
+    check('fill the temp table up to the limit', filled === maxRecords, `${filled}/${maxRecords} 行`);
+
+    const fullDetail = await call(`/api/databases/${capTableId}`);
+    check(
+      'capacity reports the table as full',
+      fullDetail.data?.capacity?.atCapacity === true && fullDetail.data?.capacity?.recordsFull === true,
+      `atCapacity=${fullDetail.data?.capacity?.atCapacity} records=${fullDetail.data?.capacity?.records}/${maxRecords}`,
+    );
+
+    const overLimit = await call(`/api/databases/${capTableId}/records`, {
+      method: 'POST',
+      body: { values: { [capFieldId]: '超限' } },
+    });
+    check(
+      'creating a record past the limit is rejected',
+      overLimit.status === 403 && overLimit.data?.error?.code === 'capacity_exceeded',
+      `status=${overLimit.status} code=${overLimit.data?.error?.code ?? ''}`,
+    );
+
+    const overBulk = await call(`/api/databases/${capTableId}/records/bulk`, {
+      method: 'POST',
+      body: { records: [{ [capFieldId]: '超限 A' }, { [capFieldId]: '超限 B' }] },
+    });
+    check(
+      'bulk creating past the limit is rejected',
+      overBulk.status === 403 && overBulk.data?.error?.code === 'capacity_exceeded',
+      `status=${overBulk.status} code=${overBulk.data?.error?.code ?? ''}`,
+    );
+
+    const fullRows = await call(`/api/databases/${capTableId}/rows?limit=1`);
+    const fullRowId = fullRows.data?.rows?.[0]?.id;
+
+    const overCopy = await call(`/api/databases/${capTableId}/records/duplicate`, {
+      method: 'POST',
+      body: { recordIds: [fullRowId ?? 'missing'] },
+    });
+    check(
+      'duplicating past the limit is rejected',
+      overCopy.status === 403 && overCopy.data?.error?.code === 'capacity_exceeded',
+      `status=${overCopy.status} code=${overCopy.data?.error?.code ?? ''}`,
+    );
+
+    const blockedUpload = new FormData();
+    blockedUpload.set('file', new Blob(['capacity'], { type: 'text/plain' }), 'capacity.txt');
+    blockedUpload.set('databaseId', capTableId);
+    const rejectedUpload = await call('/api/files', { method: 'POST', form: blockedUpload });
+    check(
+      'uploading an attachment to a full table is rejected',
+      rejectedUpload.status === 403 && rejectedUpload.data?.error?.code === 'capacity_exceeded',
+      `status=${rejectedUpload.status} code=${rejectedUpload.data?.error?.code ?? ''}`,
+    );
+
+    // 「只拦增长」：满了以后编辑 / 删除依旧可用（不然数据永远清理不出来）
+    const stillEditable = await call(`/api/records/${fullRowId}`, {
+      method: 'PATCH',
+      body: { values: { [capFieldId]: '满了也能改' } },
+    });
+    check(
+      'editing an existing record is still allowed when full',
+      stillEditable.status === 200 && stillEditable.data?.record?.values?.[capFieldId] === '满了也能改',
+      `status=${stillEditable.status}`,
+    );
+
+    const freed = await call(`/api/records/${fullRowId}`, { method: 'DELETE' });
+    check('deleting a record is still allowed when full', freed.data?.ok === true, `status=${freed.status}`);
+
+    const refilled = await call(`/api/databases/${capTableId}/records`, {
+      method: 'POST',
+      body: { values: { [capFieldId]: '腾出空间后又能新建' } },
+    });
+    const afterFree = await call(`/api/databases/${capTableId}`);
+    // 删掉 1 行后新建成功（刚刚好又填回上限，所以 atCapacity 会重新变回 true）
+    check(
+      'the table accepts new records again after freeing space',
+      refilled.status === 201 && afterFree.data?.capacity?.records === maxRecords,
+      `status=${refilled.status} records=${afterFree.data?.capacity?.records}/${maxRecords}`,
+    );
+
+    const removedCapTable = await call(`/api/databases/${capTableId}`, { method: 'DELETE' });
+    check('cleanup the capacity table', removedCapTable.data?.ok === true, `status=${removedCapTable.status}`);
   }
 
   // ------------------------------------------------------------------ cleanup

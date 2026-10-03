@@ -24,6 +24,7 @@ import {
   type SqlRow,
 } from '../http';
 import { recordFromRow } from '../mappers';
+import { assertDatabaseCanGrow } from '../capacity';
 import { loadNotes } from '../notes';
 import { withDefaultStatus } from '../statusDefaults';
 import type { Env, RequestContext, Route } from '../types';
@@ -92,6 +93,8 @@ async function positionAfter(env: Env, databaseId: string, anchorId: string | nu
 async function createRecordHandler(ctx: RequestContext): Promise<Response> {
   const user = await requireUser(ctx.request, ctx.env);
   await requireDatabaseAccess(ctx.env, ctx.params.id, user, 'edit');
+  // 容量满了只拦增长：新建记录会被 403 capacity_exceeded 挡回去（编辑 / 删除照常）
+  await assertDatabaseCanGrow(ctx.env, ctx.params.id, { rows: 1 });
   const body = await readJson(ctx.request);
 
   const properties = await loadProperties(ctx.env, ctx.params.id);
@@ -149,6 +152,8 @@ async function bulkCreateHandler(ctx: RequestContext): Promise<Response> {
       : [];
   if (!list.length) throw badRequest('请至少提交一行数据');
   if (list.length > MAX_BULK) throw badRequest(`单次最多创建 ${MAX_BULK} 行`);
+  // 批量新建按行数预检：整批要么进得去、要么整批拒绝（别写一半）
+  await assertDatabaseCanGrow(ctx.env, ctx.params.id, { rows: list.length });
 
   const properties = await loadProperties(ctx.env, ctx.params.id);
   if (!properties.length) throw badRequest('该表格还没有字段');
@@ -262,6 +267,8 @@ async function duplicateRecordsHandler(ctx: RequestContext): Promise<Response> {
   const recordIds = Array.isArray(body.recordIds) ? body.recordIds.map(String) : [];
   if (!recordIds.length) throw badRequest('请选择要复制的记录');
   if (recordIds.length > MAX_BULK) throw badRequest(`单次最多复制 ${MAX_BULK} 行`);
+  // 复制也是增长（已归档 / 不存在的 id 会被跳过，这里按请求条数保守预检）
+  await assertDatabaseCanGrow(ctx.env, ctx.params.id, { rows: recordIds.length });
 
   const now = Date.now();
   const created: RowRecord[] = [];

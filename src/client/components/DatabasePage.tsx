@@ -22,6 +22,7 @@ import type {
 } from '../../shared/types';
 import { defaultViewConfig } from '../../shared/views';
 import { conditionConjunction, groupFilterConditions, type Conjunction } from '../../shared/viewFilter';
+import { capacityBlockedHint, capacityTooltip } from '../../shared/capacity';
 import { ApiError, api } from '../api';
 import { useCellEditLocks } from '../lib/cellEditLocks';
 import { applyView, groupRows, visibleProperties } from '../lib/viewEngine';
@@ -156,6 +157,18 @@ export function DatabasePage({
   const viewScoped = detail.viewScoped;
   /** 字段 / 视图结构是否可改：只看访问权（表级锁定功能已移除） */
   const canEditStructure = canEdit && !viewScoped;
+
+  /**
+   * 容量到上限后**只拦增长**：新建记录 / 复制记录 / 上传附件之前先在本地挡一下
+   * （给一句人话，省掉一次必然失败的请求）；服务端同样会用 403 `capacity_exceeded`
+   * 兜底，所以这里不是唯一防线。编辑、查询、删除已有记录都不受影响。
+   */
+  const blockedByCapacity = (): boolean => {
+    const hint = detail.capacity ? capacityBlockedHint(detail.capacity) : '';
+    if (!hint) return false;
+    onToast(hint, 'error');
+    return true;
+  };
 
   const users = useMemo<UserNames>(() => {
     // 行元数据（创建人 / 最后编辑人）里的用户可能只是被定向分享的访客，不在成员列表中
@@ -559,6 +572,7 @@ export function DatabasePage({
 
   const createRow = async (preset?: Record<string, CellValue>) => {
     if (!canEdit) return;
+    if (blockedByCapacity()) return;
     const release = beginWrite();
     try {
       const result = await api.createRecord(detail.id, { values: { ...preset } });
@@ -627,6 +641,7 @@ export function DatabasePage({
 
   const duplicateRows = async (targets: RowRecord[]) => {
     if (!canEdit || !targets.length) return;
+    if (blockedByCapacity()) return;
     const release = beginWrite();
     try {
       const result = await api.duplicateRecords(
@@ -662,6 +677,8 @@ export function DatabasePage({
 
   const uploadFile = async (row: RowRecord, property: Property, file: File): Promise<FileValue> => {
     if (property.locked) throw new Error(`字段「${property.name}」已锁定，无法上传文件`);
+    // 附件容量到上限：不能再往上堆新文件（表格页顶部的提示条里写了怎么恢复）
+    if (detail.capacity?.atCapacity) throw new Error(capacityBlockedHint(detail.capacity));
     // 文件字段属于这个格子的值：勾选了「限制编辑」时保存过、10 秒计时窗口已过、
     // 这一格仍有内容的话也不允许再上传（服务端同样会拒绝）
     if (cellGuard.isSpent(row.id, property.id)) {
@@ -672,6 +689,8 @@ export function DatabasePage({
       recordId: row.id,
       propertyId: property.id,
     });
+    // 刚上传的文件立刻计入容量：刷新一次侧边栏进度条（新增 / 删除记录已经会刷）
+    onReloadList();
     return result.file;
   };
 
@@ -961,6 +980,13 @@ export function DatabasePage({
             </button>
           ) : null}
         </header>
+      ) : null}
+
+      {/* 容量到上限：只拦增长 —— 表格照常打开、照常查询，新增 / 复制 / 上传都停用 */}
+      {detail.capacity?.atCapacity ? (
+        <p className="capacity-notice" role="status" title={capacityTooltip(detail.capacity)}>
+          ⛔ {capacityBlockedHint(detail.capacity)}
+        </p>
       ) : null}
 
       {activeView ? (

@@ -46,6 +46,11 @@
   "vars": {
     "APP_NAME": "Qafield",
     "MAX_UPLOAD_MB": "25",
+    // 单表容量：到上限后只拦「增长」（新建 / 批量新建 / 复制记录 / 上传附件会被
+    // 403 capacity_exceeded 挡下），查看 / 查询 / 改已有记录 / 删除都不受影响。
+    // 侧边栏里每张表后面的进度条就是这两个维度的用量。
+    "MAX_DATABASE_RECORDS": "500",
+    "MAX_DATABASE_STORAGE_MB": "1024",
     // set to "false" to close public registration
     "ALLOW_SIGNUP": "true",
     // 注册确认码（邮箱验证）的有效期，分钟

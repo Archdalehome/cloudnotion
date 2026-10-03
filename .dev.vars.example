@@ -21,3 +21,12 @@ ADMIN_PASSWORD=Smoke1admin
 
 # 保留测试域白名单（wrangler.jsonc 里也配了一份，这里可以按需加自己的测试域）
 AUTH_ECHO_CODE_DOMAINS=example.com,example.org,example.net
+
+# 单表容量上限（wrangler.jsonc 里也配了一份，这里改的是本地 dev 的值）。
+# 到上限后只拦「增长」：新建 / 批量新建 / 复制记录 / 上传附件会被
+# 403 capacity_exceeded 挡下，查看 / 查询 / 改已有记录 / 删除都不受影响；
+# 侧边栏里每张表后面的进度条显示的就是这两个维度的用量。
+# 本地想快点试出「已满」效果，可以把记录数调小（比如 10）。
+MAX_DATABASE_RECORDS=500
+# 单表附件合计上限（MB）
+MAX_DATABASE_STORAGE_MB=1024

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { DatabaseSummary, InboxMessage, SessionUser } from '../../shared/types';
+import { capacityLevel, capacityPercent, capacityTooltip } from '../../shared/capacity';
+import type { DatabaseCapacity, DatabaseSummary, InboxMessage, SessionUser } from '../../shared/types';
 import { ApiError } from '../api';
 import { InboxButton } from './InboxButton';
 import { UserChip } from './UserChip';
@@ -31,6 +32,33 @@ interface SidebarProps {
   onInboxRefresh: () => void;
   /** 点开一条私信：已读 + 打开记录卡片并定位到那条备注 */
   onInboxSelect: (message: InboxMessage) => void;
+}
+
+/**
+ * 侧边栏里每张表的容量条：取「记录数 / 附件占用」里更紧张的那个维度的占比。
+ * 细条 + 悬停提示（`title`）；>= 80% 转黄、到上限转红并标「已满」。
+ * 这里只负责显示，拦增长由服务端（403 `capacity_exceeded`）和表格页负责。
+ */
+function CapacityMeter({ capacity }: { capacity?: DatabaseCapacity }) {
+  // 老标签页里可能是升级前拉到的旧会话数据（没有 capacity 字段），别让它把侧边栏搞崩
+  if (!capacity) return null;
+  const percent = capacityPercent(capacity);
+  return (
+    <>
+      <span
+        className={`capacity-meter ${capacityLevel(capacity)}`}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(percent)}
+        aria-label={`容量已用 ${percent}%`}
+        title={capacityTooltip(capacity)}
+      >
+        <span className="capacity-meter-fill" style={{ width: `${percent}%` }} />
+      </span>
+      {capacity.atCapacity ? <span className="capacity-full-tag">已满</span> : null}
+    </>
+  );
 }
 
 export function Sidebar({
@@ -152,6 +180,8 @@ export function Sidebar({
             >
               <span>{database.icon || '📋'}</span>
               <span className="label">{database.name}</span>
+              {/* 容量条：记录数 / 附件占用快满时变黄、满了转红并标「已满」 */}
+              <CapacityMeter capacity={database.capacity} />
               {database.locked ? (
                 <span className="small muted" title="结构已锁定">
                   🔒

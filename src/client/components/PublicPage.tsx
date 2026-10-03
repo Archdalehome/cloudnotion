@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FIELD_META, cellLockHint, cellLockKey, isEmptyValue, sameCellValue } from '../../shared/fields';
+import { capacityBlockedHint, capacityTooltip } from '../../shared/capacity';
 import type { CellValue, DatabaseChanges, Property, PublicDatabaseResponse, RowRecord } from '../../shared/types';
 import { ApiError, publicApi } from '../api';
 import { useCellEditLocks } from '../lib/cellEditLocks';
@@ -209,6 +210,12 @@ export function PublicPage({ token }: PublicPageProps) {
 
   const createRow = useCallback(async () => {
     if (!canEdit) return;
+    // 容量到上限后只拦增长：本地先给一句人话，服务端也会用 403 capacity_exceeded 挡下
+    const hint = payload?.database.capacity ? capacityBlockedHint(payload.database.capacity) : '';
+    if (hint) {
+      setError(hint);
+      return;
+    }
     const release = beginWrite();
     try {
       const result = await publicApi.createRecord(token, {});
@@ -218,7 +225,7 @@ export function PublicPage({ token }: PublicPageProps) {
     } finally {
       release();
     }
-  }, [beginWrite, canEdit, token]);
+  }, [beginWrite, canEdit, payload, token]);
 
   const deleteRow = useCallback(
     async (row: RowRecord) => {
@@ -256,6 +263,11 @@ export function PublicPage({ token }: PublicPageProps) {
     );
   }
 
+  // 容量到上限（记录数或附件）：这张表只能查看和查询了
+  const capacity = payload.database.capacity;
+  const capacityHint = capacity ? capacityBlockedHint(capacity) : '';
+  const capacityTip = capacity ? capacityTooltip(capacity) : '';
+
   return (
     <div className="public-page">
       <header className="topbar">
@@ -273,6 +285,11 @@ export function PublicPage({ token }: PublicPageProps) {
         <p className="muted small share-desc">该链接已开启「限制编辑」：输入不限次数，但每次保存后 10 秒内还能继续修改，之后该格子只能查看（把内容清空则视为没有输入，不受限制）。</p>
       ) : null}
       {error ? <p className="error small share-desc">{error}</p> : null}
+      {capacityHint ? (
+        <p className="capacity-notice" role="status" title={capacityTip}>
+          ⛔ {capacityHint}
+        </p>
+      ) : null}
 
       {payload.views.length > 1 ? (
         <div className="viewbar">
@@ -292,7 +309,13 @@ export function PublicPage({ token }: PublicPageProps) {
       <div className="grid-wrap">
         {canEdit ? (
           <div className="grid-toolbar">
-            <button type="button" className="btn primary small" onClick={() => void createRow()}>
+            <button
+              type="button"
+              className="btn primary small"
+              onClick={() => void createRow()}
+              disabled={Boolean(capacity?.atCapacity)}
+              title={capacityHint || undefined}
+            >
               ＋ 新建记录
             </button>
           </div>

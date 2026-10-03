@@ -310,6 +310,29 @@ export interface CellEditLocks {
 
 /* -------------------------------------------------------------- databases */
 
+/**
+ * 单表容量用量（记录条数 + 附件占用），随会话与表格详情一起下发。
+ *
+ * 上限按「表」计算（见 `src/worker/capacity.ts`，默认 500 条记录 / 1GB 附件），
+ * 到上限后**只拦增长**：新建记录、批量新建、复制记录、上传附件会被 403
+ * `capacity_exceeded` 挡回去；查看、搜索、筛选、分页、增量同步、修改与删除
+ * 已有记录都不受影响（清理掉一些数据后立刻又能新增）。
+ */
+export interface DatabaseCapacity {
+  /** 该表的有效记录数（不含软删除归档的行） */
+  records: number;
+  maxRecords: number;
+  /** 该表所有附件的大小之和（`files.size`） */
+  storageBytes: number;
+  maxStorageBytes: number;
+  /** 记录数已达上限：不能再新建 / 批量新建 / 复制记录 */
+  recordsFull: boolean;
+  /** 附件已达上限：不能再上传附件 */
+  storageFull: boolean;
+  /** 任一维度到上限 = 这张表不能再增长（进度条转红 + 表格页显示只读提示） */
+  atCapacity: boolean;
+}
+
 export interface DatabaseSummary {
   id: string;
   name: string;
@@ -327,9 +350,13 @@ export interface DatabaseSummary {
   createdAt: number;
   updatedAt: number;
   rowCount?: number;
+  /** 单表容量用量：侧边栏里每张表后面的进度条 */
+  capacity: DatabaseCapacity;
 }
 
 export interface DatabaseDetail extends CellEditLocks {
+  /** 单表容量用量：表格页顶部的只读提示 / 新建前的拦截 */
+  capacity: DatabaseCapacity;
   id: string;
   name: string;
   icon: string;
@@ -582,6 +609,8 @@ export interface PublicDatabaseResponse extends CellEditLocks {
     /** 表格所有者（公开链接里「当前用户」筛选解析为这个人） */
     ownerId: string;
     ownerName: string;
+    /** 单表容量用量：公开链接页到上限后同样只能查看 */
+    capacity: DatabaseCapacity;
   };
   properties: Property[];
   views: ViewDef[];

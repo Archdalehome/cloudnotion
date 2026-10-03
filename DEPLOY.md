@@ -60,6 +60,8 @@ npm run deploy                 # vite build && wrangler deploy
 | --- | --- | --- |
 | `APP_NAME` | `Qafield` | 站点名称：前端标题 / 邮件标题 / 健康检查返回的名称 |
 | `MAX_UPLOAD_MB` | `25` | 单文件上传上限（MB） |
+| `MAX_DATABASE_RECORDS` | `500` | **单表**记录数上限。到上限后只拦「增长」：新建 / 批量新建 / 复制记录一律 `403 capacity_exceeded`，而查看、查询、改已有记录、删记录都不受影响（删掉一些立刻又能新建，见 [README 功能表](./README.md)） |
+| `MAX_DATABASE_STORAGE_MB` | `1024` | **单表**附件合计上限（MB，默认 1GB）。附件上传超过这个总量、或表格已经满员时同样返回 `403 capacity_exceeded`；侧边栏每张表后面的进度条显示的就是这两项用量 |
 | `ALLOW_SIGNUP` | `true` | 设为 `"false"` 关闭公开注册（已有账号仍可登录） |
 | `AUTH_CODE_TTL_MINUTES` | `15` | 注册邮箱确认码有效期（分钟） |
 | `AUTH_ECHO_CODE_DOMAINS` | `example.com,example.org,example.net` | 收件人域命中白名单时确认码**不发信**、直接回显在响应里（`devCode`）。这些都是永远收不到邮件的保留测试域，所以不会削弱真实邮箱的验证强度；另外只要没配 `RESEND_API_KEY`，任何邮箱都回显 |
@@ -70,9 +72,9 @@ npm run deploy                 # vite build && wrangler deploy
 ## 5. 部署后验证
 
 ```bash
-# 冒烟测试（227 项断言，覆盖两步注册/登录/建表/记录/视图/分享/成员/附件/改密码/用户管理/会话兜底）
+# 冒烟测试（242 项断言，覆盖两步注册/登录/建表/记录/视图/分享/成员/附件/单表容量/改密码/用户管理/会话兜底）
 # 线上跑同一套断言：唯一会改密码的「重置自己密码」只对 @example.* 测试管理员执行，
-# 真实 ADMIN_EMAIL 会自动跳过那 2 项（结果 225/225），不会重置你的密码、也不会踢你下线
+# 真实 ADMIN_EMAIL 会自动跳过那 2 项（结果 240/240），不会重置你的密码、也不会踢你下线
 BASE_URL=https://cloudnotion.<your-subdomain>.workers.dev node scripts/smoke-test.mjs
 
 # 路由自检
@@ -81,7 +83,7 @@ npm run check:routes
 
 > 线上跑冒烟测试前，建议先在 Worker 上配好 `ADMIN_EMAIL` + `ADMIN_PASSWORD`（第 6.6 节）：
 > 配了就会连「用户管理」一起测（工作流会把仓库里同名的 Secrets 透传给线上冒烟测试；未配置时回落到
-> `admin@example.com`，该段自动 `skip`，其余断言照跑 —— 实测这类跑法是 **204/204 checks passed**，
+> `admin@example.com`，该段自动 `skip`，其余断言照跑 —— 实测这类跑法是 **219/219 checks passed**，
 > 不是失败，别误判）。
 > 唯一会改数据的断言是「重置自己密码」——它只对 `@example.*` 的测试管理员跑，
 > 线上用真实 `ADMIN_EMAIL` 时会自动跳过（不会重置你的密码 / 踢你下线；要强制跑设 `SMOKE_ADMIN_SELF_RESET=1`）。
@@ -177,7 +179,7 @@ npm run typecheck ; npm run check:routes ; npm run build:client
 npm run db:migrate:local
 cp .dev.vars.example .dev.vars          # 本地管理员账号 + 测试域回显白名单（冒烟测试要用）
 npx wrangler dev --port 8787 --local    # 另开一个终端保持运行
-node scripts/smoke-test.mjs             # 期望 227/227 checks passed（.dev.vars.example 里的 admin@example.com 是测试管理员，跑满 227）
+node scripts/smoke-test.mjs             # 期望 242/242 checks passed（.dev.vars.example 里的 admin@example.com 是测试管理员，跑满 242）
 ```
 
 ### 6.6 邮件（Resend）与超级管理员

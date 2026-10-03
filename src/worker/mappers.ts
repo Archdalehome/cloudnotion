@@ -1,5 +1,6 @@
 /** D1 row -> API model conversions. */
 import type {
+  DatabaseCapacity,
   DatabaseSummary,
   FieldType,
   Member,
@@ -90,6 +91,11 @@ export function databaseSummaryFromRow(
   sharedViewNames: string[] = [],
   /** 只通过视图定向分享获得访问权（不是所有者、也不是表格成员） */
   viewScoped = false,
+  /**
+   * 单表容量用量：查询里顺带算出来的（见 `worker/capacity.ts` 的
+   * `DATABASE_USAGE_SELECT`），侧边栏拿它画进度条。
+   */
+  capacity: DatabaseCapacity,
 ): DatabaseSummary {
   return {
     id: sqlString(row, 'id'),
@@ -105,6 +111,7 @@ export function databaseSummaryFromRow(
     createdAt: sqlNumber(row, 'created_at'),
     updatedAt: sqlNumber(row, 'updated_at'),
     rowCount: row.record_count === undefined ? undefined : sqlNumber(row, 'record_count'),
+    capacity,
   };
 }
 

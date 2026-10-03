@@ -19,8 +19,8 @@ export function unauthorized(message = '请先登录'): HttpError {
   return new HttpError(401, 'unauthorized', message);
 }
 
-export function forbidden(message = '没有权限执行该操作'): HttpError {
-  return new HttpError(403, 'forbidden', message);
+export function forbidden(message = '没有权限执行该操作', code = 'forbidden'): HttpError {
+  return new HttpError(403, code, message);
 }
 
 export function notFound(message = '资源不存在'): HttpError {
