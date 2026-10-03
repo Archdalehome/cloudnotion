@@ -7,7 +7,7 @@
  */
 import type { DatabaseCapacity } from './types';
 
-/** 进度条开始变色的占比：记录数 / 附件占用任一维度超过 80% 就转黄提醒 */
+/** 容量提示开始变色的占比：记录数 / 附件占用任一维度超过 80% 就转黄提醒 */
 export const CAPACITY_WARN_RATIO = 0.8;
 
 /** 人类可读的容量：1024 → `1 KB`、1.5 MB、1 GB */
@@ -50,7 +50,7 @@ export function capacityLevelOfRatio(ratio: number): 'ok' | 'warn' | 'full' {
   return ratio >= CAPACITY_WARN_RATIO ? 'warn' : 'ok';
 }
 
-/** 一侧容量的可画状态（侧边栏左右两条、提示框里的小条各用一份） */
+/** 一侧容量的可画状态（提示框里的两条小条各用一份；侧边栏硬盘图标只看整体档位） */
 export interface CapacitySide {
   /** 已用占上限的比例（0~1；历史数据超过上限时会 > 1） */
   ratio: number;
@@ -75,12 +75,12 @@ function sideOf(used: number, max: number): CapacitySide {
   };
 }
 
-/** 记录数那一侧（侧边栏双条的左半） */
+/** 记录数那一侧（提示框里「记录」那条小条） */
 export function capacityRecordsSide(capacity: DatabaseCapacity): CapacitySide {
   return sideOf(capacity.records, capacity.maxRecords);
 }
 
-/** 附件占用那一侧（侧边栏双条的右半） */
+/** 附件占用那一侧（提示框里「附件」那条小条） */
 export function capacityStorageSide(capacity: DatabaseCapacity): CapacitySide {
   return sideOf(capacity.storageBytes, capacity.maxStorageBytes);
 }

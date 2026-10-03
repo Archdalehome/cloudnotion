@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import {
   capacityBlockedHint,
+  capacityLevelOfRatio,
+  capacityRatio,
   capacityRecordsSide,
   capacityRecordsUsageText,
   capacityStorageSide,
@@ -196,11 +198,10 @@ function CapacityPanel({
 }
 
 /**
- * 侧边栏里每张表的「剩余容量」双条：中间一道 0 刻度，左边是记录、右边是附件。
+ * 侧边栏里每张表的容量入口：一个硬盘图标（💾）。
  *
- * 刻度画的是「还剩多少」：表里没数据时两条都是满的，记录 / 附件越用越多，
- * 两侧的剩余条就越短（用光就只剩中间那个 0）。某一侧剩余不足 20% 转深黄、
- * 用光转深红；整表（任一维度）到上限时行尾再挂一个「已满」标签。
+ * 容量富余时就是个普通图标；记录 / 附件任一维度用掉 80% 起底色转浅黄、
+ * 到上限转浅红，并在行尾再挂一个「已满」标签，具体用到多少在浮层里看。
  * 点一下弹出容量明细（见 `CapacityPanel`），悬停仍是 `title` 里的一行提示。
  * 这里只负责显示，拦增长由服务端（403 `capacity_exceeded`）和表格页负责。
  */
@@ -218,10 +219,10 @@ function CapacityMeter({
   const close = useCallback(() => setAnchor(null), []);
   // 老标签页里可能是升级前拉到的旧会话数据（没有 capacity 字段），别让它把侧边栏搞崩
   if (!capacity) return null;
-  const records = capacityRecordsSide(capacity);
-  const storage = capacityStorageSide(capacity);
+  // 图标底色按「更紧张的那一侧」判档：记录或附件任一维度吃紧都要能看出来
+  const level = capacityLevelOfRatio(capacityRatio(capacity));
 
-  /** 点 / 回车容量条：展开明细，再点一次收起（拦掉冒泡，别顺带切换表格） */
+  /** 点 / 回车图标：展开明细，再点一次收起（拦掉冒泡，别顺带切换表格） */
   const toggle = (event: React.SyntheticEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -231,7 +232,7 @@ function CapacityMeter({
   return (
     <>
       <span
-        className={`capacity-meter${anchor ? ' open' : ''}`}
+        className={`capacity-meter ${level}${anchor ? ' open' : ''}`}
         role="button"
         tabIndex={0}
         aria-haspopup="dialog"
@@ -243,15 +244,9 @@ function CapacityMeter({
           if (event.key === 'Enter' || event.key === ' ') toggle(event);
         }}
       >
-        {/* 左：记录剩余；右：附件剩余。两条都从中间的 0 往外算，剩余越少条越短 */}
-        <span className={`capacity-side left ${records.level}`} aria-hidden="true">
-          <span className="capacity-side-fill" style={{ width: `${records.remainingRatio * 100}%` }} />
-        </span>
-        <span className="capacity-zero" aria-hidden="true">
-          0
-        </span>
-        <span className={`capacity-side right ${storage.level}`} aria-hidden="true">
-          <span className="capacity-side-fill" style={{ width: `${storage.remainingRatio * 100}%` }} />
+        {/* 硬盘图标：富余 / 快满 / 已满 靠底色区分，用到多少在浮层与 title 里看 */}
+        <span className="capacity-disk" aria-hidden="true">
+          💾
         </span>
       </span>
       {capacity.atCapacity ? <span className="capacity-full-tag">已满</span> : null}
