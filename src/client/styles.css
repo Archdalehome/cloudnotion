@@ -355,13 +355,13 @@ textarea.input {
   white-space: nowrap;
 }
 
-/* 「添加表格」区（表格列表下方）：名额说明 + 按钮 + 新建表单 */
+/* 「添加表格」区（在「我的表格」上方）：名额说明 + 添加按钮 + 新建表单 */
 .sidebar-add {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .sidebar-add-note {

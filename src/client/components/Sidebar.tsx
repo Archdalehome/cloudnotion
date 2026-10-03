@@ -360,6 +360,8 @@ export function Sidebar({
    * 就按「基础名额 - 已有表格」本地兜底，别让那句文案空着。
    */
   const quotaView = quota ?? tableQuotaOf({ used: myDatabases.length, shared: 0 });
+  /** 名额用完（剩余 0）时「添加」按钮置灰不可点：只能先分享表格或购买名额 */
+  const addDisabled = quotaView.remaining <= 0;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -405,6 +407,59 @@ export function Sidebar({
         </button>
       </div>
 
+      {/* 「添加表格」区（在「我的表格」上方）：名额说明 + 添加按钮 + 新建表单 */}
+      <div className="sidebar-add">
+        <p className="sidebar-add-note">
+          你有
+          <button
+            type="button"
+            className="quota-count"
+            title="表格数量规则与购买"
+            aria-label={`还可以添加 ${quotaView.remaining} 个表格，点击查看数量说明`}
+            onClick={() => setQuotaOpen(true)}
+          >
+            {quotaView.remaining}
+          </button>
+          个表格可以
+        </p>
+        <button
+          type="button"
+          className="btn primary small sidebar-add-btn"
+          title={
+            addDisabled ? '名额已用完，点上面的数字看看规则与购买' : creating ? '收起新建表格表单' : '新建表格'
+          }
+          disabled={addDisabled}
+          onClick={() => setCreating((prev) => !prev)}
+        >
+          添加
+        </button>
+
+        {/* 新建表格固定落成空白表格（只有「名称」字段），不再让用户挑模板 */}
+        {creating && !addDisabled ? (
+          <form onSubmit={submit} className="sidebar-add-form">
+            <label className="field">
+              <span>表格名称</span>
+              <input
+                className="input"
+                value={name}
+                autoFocus
+                onChange={(event) => setName(event.target.value)}
+                placeholder="例如：项目排期"
+              />
+            </label>
+            {error ? <p className="error small">{error}</p> : null}
+            <div className="row gap">
+              <button className="btn primary small" type="submit" disabled={busy || !name.trim()}>
+                {busy ? '创建中…' : '创建'}
+              </button>
+              <button className="btn ghost small" type="button" onClick={() => setCreating(false)}>
+                取消
+              </button>
+            </div>
+          </form>
+        ) : null}
+      </div>
+
       <div className="sidebar-section">
         <div className="row">
           <span>我的表格</span>
@@ -439,59 +494,9 @@ export function Sidebar({
           ))
         ) : (
           <p className="small muted" style={{ padding: '0 12px' }}>
-            还没有表格，点击下方「添加表格」新建。
+            还没有表格，点上方「添加」新建。
           </p>
         )}
-      </div>
-
-      {/* 「添加表格」从标题行移到列表下方：先是名额说明，再是按钮与新建表单 */}
-      <div className="sidebar-add">
-        <p className="sidebar-add-note">
-          你有
-          <button
-            type="button"
-            className="quota-count"
-            title="表格数量规则与购买"
-            aria-label={`还可以添加 ${quotaView.remaining} 个表格，点击查看数量说明`}
-            onClick={() => setQuotaOpen(true)}
-          >
-            {quotaView.remaining}
-          </button>
-          个表格可以添加，点击「添加表格」按钮可以添加表格。
-        </p>
-        <button
-          type="button"
-          className="btn primary small sidebar-add-btn"
-          title={creating ? '收起新建表格表单' : '新建表格'}
-          onClick={() => setCreating((prev) => !prev)}
-        >
-          ＋ 添加表格
-        </button>
-
-        {/* 新建表格固定落成空白表格（只有「名称」字段），不再让用户挑模板 */}
-        {creating ? (
-          <form onSubmit={submit} className="sidebar-add-form">
-            <label className="field">
-              <span>表格名称</span>
-              <input
-                className="input"
-                value={name}
-                autoFocus
-                onChange={(event) => setName(event.target.value)}
-                placeholder="例如：项目排期"
-              />
-            </label>
-            {error ? <p className="error small">{error}</p> : null}
-            <div className="row gap">
-              <button className="btn primary small" type="submit" disabled={busy || !name.trim()}>
-                {busy ? '创建中…' : '创建'}
-              </button>
-              <button className="btn ghost small" type="button" onClick={() => setCreating(false)}>
-                取消
-              </button>
-            </div>
-          </form>
-        ) : null}
       </div>
 
       <div className="sidebar-section">
