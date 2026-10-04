@@ -422,7 +422,7 @@ export function Sidebar({
             >
               {quotaView.remaining}
             </button>
-            个表格可以
+            个表格可
           </p>
           <button
             type="button"
